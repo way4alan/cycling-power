@@ -81,4 +81,131 @@ function renderLeaderboard(){
     const w = wkg(r)
     const ct = cat(w)
     return `<div class="rider-row${isMe ? ' is-me' : ''}">
-      <div class="rank">${rank < 3 ? medals[rank] :
+      <div class="rank">${rank < 3 ? medals[rank] : rank+1}</div>
+      ${avatarEl(r.avatar_url, r.name)}
+      <div class="rider-info">
+        <div class="rider-name">${r.name}${isMe ? '<span class="me-tag">我</span>' : ''}</div>
+        <div class="rider-cat"><span class="cat-badge ${ct.cls}">${ct.label}</span></div>
+      </div>
+      <div class="rider-stats">
+        <div class="rider-ftp">${r.ftp} W</div>
+        <div class="rider-wkg">${wkgStr(r)} W/kg</div>
+      </div>
+    </div>`
+  }).join('')
+}
+
+function renderMatch(){
+  if(!myProfile) return
+  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
+  if(!me){
+    document.getElementById('match-me-card').innerHTML = `<div style="color:#fff;padding:8px">請先到「我的資料」填寫 FTP 和體重</div>`
+    document.getElementById('match-list').innerHTML = ''
+    return
+  }
+  document.getElementById('match-me-card').innerHTML = `
+    ${avatarEl(me.avatar_url, me.name, 48)}
+    <div class="match-me-info">
+      <div class="name">${me.name}</div>
+      <div class="stats">FTP ${me.ftp}W · ${wkgStr(me)} W/kg · <span>${cat(wkg(me)).label}</span></div>
+    </div>`
+  const others = allRiders.filter(r => r.line_user_id !== myProfile.line_user_id)
+  const ranked = others.map(r => ({...r, sim: similarity(me, r)})).sort((a,b) => b.sim - a.sim)
+  document.getElementById('match-list').innerHTML = ranked.map(r => {
+    const simCls = r.sim >= 80 ? 'sim-high' : r.sim >= 60 ? 'sim-mid' : 'sim-low'
+    const fDiff = me.ftp - r.ftp
+    const wDiff = (wkg(me) - wkg(r)).toFixed(2)
+    const adv = fDiff > 0 ? `你 FTP 高出 ${fDiff}W` : fDiff < 0 ? `對方 FTP 高出 ${Math.abs(fDiff)}W` : '勢均力敵'
+    return `<div class="match-card">
+      <div class="match-header">
+        <div class="match-name">${avatarEl(r.avatar_url, r.name, 32)} ${r.name}</div>
+        <span class="sim-badge ${simCls}">${r.sim}% 相似</span>
+      </div>
+      <div class="match-stats">
+        <div class="match-stat"><div class="val">${r.ftp}W</div><div class="lbl">FTP</div></div>
+        <div class="match-stat"><div class="val">${wkgStr(r)}</div><div class="lbl">W/kg</div></div>
+      </div>
+      <div class="match-diff">${adv} · W/kg 差距 ${Math.abs(wDiff)}</div>
+    </div>`
+  }).join('')
+}
+
+function renderProfile(){
+  if(!myProfile) return
+  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
+  document.getElementById('profile-avatar-row').innerHTML = `
+    ${avatarEl(myProfile.avatar_url, myProfile.name, 56)}
+    <div>
+      <div class="profile-name">${myProfile.name}</div>
+      <div class="profile-line">LINE 帳號已連結</div>
+    </div>`
+  if(me){
+    document.getElementById('inp-ftp').value = me.ftp
+    document.getElementById('inp-weight').value = me.weight
+    if(me.z1) document.getElementById('z1').value = me.z1
+    if(me.z2) document.getElementById('z2').value = me.z2
+    if(me.z3) document.getElementById('z3').value = me.z3
+    if(me.z4) document.getElementById('z4').value = me.z4
+    if(me.z5) document.getElementById('z5').value = me.z5
+    updatePreview()
+  }
+}
+
+function updatePreview(){
+  const ftp = parseInt(document.getElementById('inp-ftp').value)
+  const weight = parseFloat(document.getElementById('inp-weight').value)
+  const preview = document.getElementById('wkg-preview')
+  if(ftp && weight){
+    const v = ftp / weight
+    const ct = cat(v)
+    document.getElementById('preview-val').textContent = v.toFixed(2)
+    const badge = document.getElementById('preview-cat')
+    badge.textContent = ct.label
+    badge.className = 'cat-badge ' + ct.cls
+    preview.style.display = 'flex'
+  } else {
+    preview.style.display = 'none'
+  }
+}
+
+async function saveProfile(){
+  if(!myProfile){ showToast('請先登入 LINE'); return }
+  const ftp = parseInt(document.getElementById('inp-ftp').value)
+  const weight = parseFloat(document.getElementById('inp-weight').value)
+  if(!ftp || !weight){ showToast('請填寫 FTP 和體重'); return }
+  const payload = {
+    line_user_id: myProfile.line_user_id,
+    name: myProfile.name,
+    avatar_url: myProfile.avatar_url,
+    ftp, weight,
+    z1: parseInt(document.getElementById('z1').value) || 0,
+    z2: parseInt(document.getElementById('z2').value) || 0,
+    z3: parseInt(document.getElementById('z3').value) || 0,
+    z4: parseInt(document.getElementById('z4').value) || 0,
+    z5: parseInt(document.getElementById('z5').value) || 0,
+    updated_at: new Date().toISOString()
+  }
+  const { error } = await db.from('riders').upsert(payload, { onConflict: 'line_user_id' })
+  if(error){ showToast('儲存失敗，請再試一次'); console.error(error); return }
+  showToast('✅ 資料更新成功！')
+  await loadRiders()
+  renderLeaderboard()
+  renderMatch()
+}
+
+function filterCat(v, el){
+  currentFilter = v
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'))
+  el.classList.add('active')
+  renderLeaderboard()
+}
+
+function switchTab(id){
+  document.querySelectorAll('.nav-btn').forEach((b,i) => {
+    b.classList.toggle('active', ['leaderboard','match','profile'][i] === id)
+  })
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
+  document.getElementById('tab-'+id).classList.add('active')
+}
+
+init()
