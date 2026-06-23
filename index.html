@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>騎士戰力分析</title>
+<title>PACE戰力分析</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="stylesheet" href="style.css">
@@ -13,11 +13,25 @@
   <div class="loading-icon">🚴</div>
   <div class="loading-text">載入中...</div>
 </div>
+
+<div id="pending-screen" style="display:none">
+  <div class="pending-wrap">
+    <div class="pending-icon">⏳</div>
+    <h2>申請審核中</h2>
+    <p>你的加入申請已送出，請等待管理員審核。</p>
+    <p class="pending-sub">審核通過後重新開啟 App 即可使用。</p>
+  </div>
+</div>
+
 <div id="app" style="display:none">
   <nav class="bottom-nav">
     <button class="nav-btn active" onclick="switchTab('leaderboard')">
       <span class="nav-icon">🏆</span>
       <span class="nav-label">排行榜</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('ride')">
+      <span class="nav-icon">📍</span>
+      <span class="nav-label">團騎</span>
     </button>
     <button class="nav-btn" onclick="switchTab('match')">
       <span class="nav-icon">⚡</span>
@@ -27,12 +41,16 @@
       <span class="nav-icon">👤</span>
       <span class="nav-label">我的資料</span>
     </button>
+    <button class="nav-btn admin-only" id="admin-nav-btn" onclick="switchTab('admin')" style="display:none">
+      <span class="nav-icon">🛡️</span>
+      <span class="nav-label">管理</span>
+    </button>
   </nav>
 
   <div class="content">
     <div id="tab-leaderboard" class="tab-panel active">
       <div class="page-header">
-        <h1>戰力排行榜</h1>
+        <h1>PACE戰力排行榜</h1>
         <div class="cat-filters">
           <button class="cat-btn active" onclick="filterCat('all',this)">全部</button>
           <button class="cat-btn" onclick="filterCat('A',this)">A貓</button>
@@ -55,6 +73,28 @@
         </div>
       </div>
       <div id="rider-list" class="rider-list"></div>
+    </div>
+
+    <div id="tab-ride" class="tab-panel">
+      <div class="page-header">
+        <h1>團騎公告</h1>
+        <button class="icon-btn" id="add-ride-btn" style="display:none" onclick="showRideForm()">＋ 新增</button>
+      </div>
+      <div id="ride-form" style="display:none" class="form-card">
+        <div class="form-row"><label>活動標題</label><input type="text" id="ride-title" placeholder="例如：週日晨騎"></div>
+        <div class="form-grid">
+          <div class="form-row"><label>日期</label><input type="date" id="ride-date"></div>
+          <div class="form-row"><label>集合時間</label><input type="time" id="ride-time"></div>
+        </div>
+        <div class="form-row"><label>集合地點</label><input type="text" id="ride-location" placeholder="例如：愛河旁停車場"></div>
+        <div class="form-row"><label>Garmin Code（選填）</label><input type="text" id="ride-garmin" placeholder="例如：AB1234"></div>
+        <div class="form-row"><label>備註（選填）</label><input type="text" id="ride-note" placeholder="例如：記得帶補給"></div>
+        <div style="display:flex;gap:8px">
+          <button class="save-btn" onclick="saveRide()">發布公告</button>
+          <button class="cancel-btn" onclick="hideRideForm()">取消</button>
+        </div>
+      </div>
+      <div id="ride-list"></div>
     </div>
 
     <div id="tab-match" class="tab-panel">
@@ -80,6 +120,10 @@
           <span id="preview-val">—</span> W/kg
           <span class="cat-badge" id="preview-cat"></span>
         </div>
+        <div class="form-row">
+          <label>心情小語（顯示在排行榜）</label>
+          <input type="text" id="inp-mood" placeholder="例如：今天腿很酸 😅" maxlength="30">
+        </div>
         <div class="zone-section">
           <div class="zone-title">訓練區間功率（選填）</div>
           <div class="zone-grid">
@@ -92,6 +136,16 @@
         </div>
         <button class="save-btn" onclick="saveProfile()">💾 儲存更新</button>
       </div>
+    </div>
+
+    <div id="tab-admin" class="tab-panel">
+      <div class="page-header"><h1>成員管理</h1></div>
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchAdminTab('pending')">待審核 <span id="pending-count" class="count-badge"></span></button>
+        <button class="admin-tab" onclick="switchAdminTab('active')">已核准成員</button>
+      </div>
+      <div id="admin-pending" class="admin-panel active"></div>
+      <div id="admin-active" class="admin-panel"></div>
     </div>
   </div>
 </div>
