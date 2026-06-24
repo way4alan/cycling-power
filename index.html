@@ -41,7 +41,7 @@
       <span class="nav-icon">👤</span>
       <span class="nav-label">我的資料</span>
     </button>
-    <button class="nav-btn admin-only" id="admin-nav-btn" onclick="switchTab('admin')" style="display:none">
+    <button class="nav-btn" id="admin-nav-btn" onclick="switchTab('admin')" style="display:none">
       <span class="nav-icon">🛡️</span>
       <span class="nav-label">管理</span>
     </button>
@@ -81,14 +81,50 @@
         <button class="icon-btn" id="add-ride-btn" style="display:none" onclick="showRideForm()">＋ 新增</button>
       </div>
       <div id="ride-form" style="display:none" class="form-card">
-        <div class="form-row"><label>活動標題</label><input type="text" id="ride-title" placeholder="例如：週日晨騎"></div>
-        <div class="form-grid">
-          <div class="form-row"><label>日期</label><input type="date" id="ride-date"></div>
-          <div class="form-row"><label>集合時間</label><input type="time" id="ride-time"></div>
+        <div class="form-row">
+          <label>活動標題</label>
+          <input type="text" id="ride-title" placeholder="例如：週日晨騎">
         </div>
-        <div class="form-row"><label>集合地點</label><input type="text" id="ride-location" placeholder="例如：愛河旁停車場"></div>
-        <div class="form-row"><label>Garmin Code（選填）</label><input type="text" id="ride-garmin" placeholder="例如：AB1234"></div>
-        <div class="form-row"><label>備註（選填）</label><input type="text" id="ride-note" placeholder="例如：記得帶補給"></div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label>日期</label>
+            <input type="date" id="ride-date">
+          </div>
+          <div class="form-row">
+            <label>集合時間</label>
+            <input type="time" id="ride-time">
+          </div>
+        </div>
+        <div class="form-row">
+          <label>第一集合點</label>
+          <select id="ride-location1" onchange="handleLocationChange('1')">
+            <option value="">載入中...</option>
+          </select>
+          <input type="text" id="ride-location1-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
+        </div>
+        <div class="form-row">
+          <label>第二集合點（選填）</label>
+          <select id="ride-location2" onchange="handleLocationChange('2')">
+            <option value="">不設第二集合點</option>
+          </select>
+          <input type="text" id="ride-location2-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
+        </div>
+        <div class="form-row">
+          <label>Strava 路線連結（選填）</label>
+          <input type="text" id="ride-strava" placeholder="https://www.strava.com/routes/...">
+        </div>
+        <div class="form-row">
+          <label>Garmin 路線連結（選填）</label>
+          <input type="text" id="ride-garmin-url" placeholder="https://connect.garmin.com/...">
+        </div>
+        <div class="form-row">
+          <label>Garmin Code（選填）</label>
+          <input type="text" id="ride-garmin" placeholder="例如：AB1234">
+        </div>
+        <div class="form-row">
+          <label>備註（選填）</label>
+          <input type="text" id="ride-note" placeholder="例如：記得帶補給">
+        </div>
         <div style="display:flex;gap:8px">
           <button class="save-btn" onclick="saveRide()">發布公告</button>
           <button class="cancel-btn" onclick="hideRideForm()">取消</button>
@@ -143,9 +179,24 @@
       <div class="admin-tabs">
         <button class="admin-tab active" onclick="switchAdminTab('pending')">待審核 <span id="pending-count" class="count-badge"></span></button>
         <button class="admin-tab" onclick="switchAdminTab('active')">已核准成員</button>
+        <button class="admin-tab" onclick="switchAdminTab('locations')">集合地點</button>
       </div>
       <div id="admin-pending" class="admin-panel active"></div>
       <div id="admin-active" class="admin-panel"></div>
+      <div id="admin-locations" class="admin-panel">
+        <div class="form-card" style="margin-bottom:12px">
+          <div class="form-row">
+            <label>地點名稱</label>
+            <input type="text" id="loc-name" placeholder="例如：愛河之心">
+          </div>
+          <div class="form-row">
+            <label>地址</label>
+            <input type="text" id="loc-address" placeholder="例如：高雄市苓雅區四維三路2號">
+          </div>
+          <button class="save-btn" onclick="saveLocation()">新增地點</button>
+        </div>
+        <div id="location-list"></div>
+      </div>
     </div>
   </div>
 </div>
