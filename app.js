@@ -8,6 +8,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 let myProfile = null
 let myData = null
 let allRiders = []
+let allLocations = []
 let currentFilter = 'all'
 let isAdmin = false
 
@@ -63,37 +64,28 @@ async function init(){
       name: profile.displayName,
       avatar_url: profile.pictureUrl
     }
-    await updateLastSeen()
+
     const { data: me } = await db.from('riders')
       .select('*').eq('line_user_id', myProfile.line_user_id).single()
     myData = me
 
+    document.getElementById('loading').style.display = 'none'
+
     if(!me){
-      await db.from('riders').insert({
-        line_user_id: myProfile.line_user_id,
-        name: myProfile.name,
-        avatar_url: myProfile.avatar_url,
-        ftp: 0, weight: 0,
-        status: 'pending',
-        last_seen: new Date().toISOString()
-      })
-      document.getElementById('loading').style.display = 'none'
-      document.getElementById('pending-screen').style.display = 'flex'
+      showPendingForm(false)
       return
     }
 
     if(me.status === 'pending'){
-      document.getElementById('loading').style.display = 'none'
-      document.getElementById('pending-screen').style.display = 'flex'
+      showPendingForm(true, me)
       return
     }
 
+    await updateLastSeen()
     isAdmin = me.is_admin === true
-    document.getElementById('loading').style.display = 'none'
     document.getElementById('app').style.display = 'block'
-    if(isAdmin){
-      document.getElementById('admin-nav-btn').style.display = 'flex'
-    }
+    if(isAdmin) document.getElementById('admin-nav-btn').style.display = 'flex'
+    await loadLocations()
     await loadRiders()
     renderLeaderboard()
     renderMatch()
@@ -106,6 +98,81 @@ async function init(){
   }
 }
 
+function showPendingForm(existing, me){
+  const screen = document.getElementById('pending-screen')
+  screen.style.display = 'flex'
+  const ftp = me?.ftp || ''
+  const weight = me?.weight || ''
+  const mood = me?.mood || ''
+  screen.innerHTML = `
+    <div class="pending-wrap">
+      <div class="pending-icon">🚴</div>
+      <h2>${existing ? '審核中' : '申請加入'}</h2>
+      <p>${existing ? '你的申請正在等待管理員審核，你可以先填好資料，審核通過後立即出現在排行榜！' : '請填寫你的資料，送出後等待管理員審核。'}</p>
+      <div class="pending-form">
+        <div class="form-row">
+          <label>FTP（瓦特）</label>
+          <input type="number" id="p-ftp" placeholder="例如 280" value="${ftp}" oninput="updatePendingPreview()">
+        </div>
+        <div class="form-row">
+          <label>體重（kg）</label>
+          <input type="number" id="p-weight" placeholder="例如 70" value="${weight}" oninput="updatePendingPreview()">
+        </div>
+        <div class="wkg-preview" id="p-wkg-preview" style="display:${ftp&&weight?'flex':'none'}">
+          <span id="p-preview-val">${ftp&&weight?(ftp/weight).toFixed(2):'—'}</span> W/kg
+          <span class="cat-badge" id="p-preview-cat"></span>
+        </div>
+        <div class="form-row">
+          <label>心情小語（選填）</label>
+          <input type="text" id="p-mood" placeholder="例如：新手上路 🙏" maxlength="30" value="${mood}">
+        </div>
+        <button class="save-btn" onclick="savePendingProfile()">${existing ? '💾 更新資料' : '📨 送出申請'}</button>
+      </div>
+      ${existing ? '<p class="pending-sub" style="margin-top:16px">審核通過後重新開啟 App 即可使用。</p>' : ''}
+    </div>`
+  if(ftp && weight) updatePendingPreview()
+}
+
+function updatePendingPreview(){
+  const ftp = parseInt(document.getElementById('p-ftp').value)
+  const weight = parseFloat(document.getElementById('p-weight').value)
+  const preview = document.getElementById('p-wkg-preview')
+  if(ftp && weight){
+    const v = ftp / weight
+    const ct = cat(v)
+    document.getElementById('p-preview-val').textContent = v.toFixed(2)
+    const badge = document.getElementById('p-preview-cat')
+    badge.textContent = ct.label
+    badge.className = 'cat-badge ' + ct.cls
+    preview.style.display = 'flex'
+  } else {
+    preview.style.display = 'none'
+  }
+}
+
+async function savePendingProfile(){
+  const ftp = parseInt(document.getElementById('p-ftp').value)
+  const weight = parseFloat(document.getElementById('p-weight').value)
+  if(!ftp || !weight){ showToast('請填寫 FTP 和體重'); return }
+  const mood = document.getElementById('p-mood').value.trim()
+  const payload = {
+    line_user_id: myProfile.line_user_id,
+    name: myProfile.name,
+    avatar_url: myProfile.avatar_url,
+    ftp, weight, mood,
+    status: 'pending',
+    updated_at: new Date().toISOString()
+  }
+  const { data: existing } = await db.from('riders')
+    .select('id').eq('line_user_id', myProfile.line_user_id).single()
+  if(existing){
+    await db.from('riders').update(payload).eq('line_user_id', myProfile.line_user_id)
+  } else {
+    await db.from('riders').insert({...payload, last_seen: new Date().toISOString()})
+  }
+  showToast('✅ 資料已儲存，等待管理員審核！')
+}
+
 async function updateLastSeen(){
   await db.from('riders')
     .update({ last_seen: new Date().toISOString() })
@@ -116,18 +183,57 @@ async function loadRiders(){
   const { data } = await db.from('riders')
     .select('*')
     .eq('status', 'approved')
+    .gt('ftp', 0)
+    .gt('weight', 0)
     .order('ftp', { ascending: false })
   allRiders = data || []
+}
+
+async function loadLocations(){
+  const { data } = await db.from('locations').select('*').order('sort_order')
+  allLocations = data || []
+  renderLocationSelects()
+}
+
+function renderLocationSelects(){
+  const opts = allLocations.map(l => `<option value="${l.address}" data-name="${l.name}">${l.name}</option>`).join('')
+  const customOpt = `<option value="__custom__">＋ 自訂地點</option>`
+  const sel1 = document.getElementById('ride-location1')
+  const sel2 = document.getElementById('ride-location2')
+  if(sel1) sel1.innerHTML = `<option value="">請選擇集合點</option>${opts}${customOpt}`
+  if(sel2) sel2.innerHTML = `<option value="">不設第二集合點</option>${opts}${customOpt}`
+}
+
+function handleLocationChange(num){
+  const sel = document.getElementById(`ride-location${num}`)
+  const custom = document.getElementById(`ride-location${num}-custom`)
+  if(sel.value === '__custom__'){
+    custom.style.display = 'block'
+    custom.focus()
+  } else {
+    custom.style.display = 'none'
+  }
+}
+
+function getLocationValue(num){
+  const sel = document.getElementById(`ride-location${num}`)
+  if(!sel.value || sel.value === '') return ''
+  if(sel.value === '__custom__'){
+    return document.getElementById(`ride-location${num}-custom`).value.trim()
+  }
+  const name = sel.options[sel.selectedIndex].getAttribute('data-name')
+  return `${name}｜${sel.value}`
 }
 
 function renderLeaderboard(){
   const sorted = [...allRiders].sort((a,b) => wkg(b) - wkg(a))
   const filtered = currentFilter === 'all' ? sorted : sorted.filter(r => cat(wkg(r)).label.startsWith(currentFilter))
-  const avgFtp = allRiders.length ? Math.round(allRiders.reduce((s,r) => s+r.ftp, 0) / allRiders.length) : '—'
-  const avgW = allRiders.length ? (allRiders.reduce((s,r) => s+wkg(r), 0) / allRiders.length).toFixed(2) : '—'
+  const validRiders = allRiders.filter(r => r.ftp > 0 && r.weight > 0)
+  const avgFtp = validRiders.length ? Math.round(validRiders.reduce((s,r) => s+r.ftp, 0) / validRiders.length) : '—'
+  const avgW = validRiders.length ? (validRiders.reduce((s,r) => s+wkg(r), 0) / validRiders.length).toFixed(2) : '—'
   document.getElementById('avg-ftp').textContent = avgFtp
   document.getElementById('avg-wkg').textContent = avgW
-  document.getElementById('member-count').textContent = allRiders.length
+  document.getElementById('member-count').textContent = validRiders.length
   const medals = ['🥇','🥈','🥉']
   document.getElementById('rider-list').innerHTML = filtered.map((r, i) => {
     const rank = sorted.indexOf(r)
@@ -215,14 +321,54 @@ async function renderRides(){
   if(isAdmin) document.getElementById('add-ride-btn').style.display = 'block'
   document.getElementById('ride-list').innerHTML = rides.length === 0
     ? `<div class="empty-state">目前沒有團騎公告</div>`
-    : rides.map(r => `
-      <div class="ride-card">
+    : rides.map(r => {
+      const parts = r.location ? r.location.split('｜') : []
+      const locName = parts.length > 1 ? parts[0] : r.location
+      const locAddr = parts.length > 1 ? parts[1] : r.location
+      const loc2Parts = r.location2 ? r.location2.split('｜') : []
+      const loc2Name = loc2Parts.length > 1 ? loc2Parts[0] : r.location2
+      const loc2Addr = loc2Parts.length > 1 ? loc2Parts[1] : r.location2
+      return `<div class="ride-card">
         <div class="ride-title">🚴 ${r.title}</div>
         <div class="ride-info-grid">
           <div class="ride-info-item"><div><span class="label">日期</span>${r.date}</div></div>
           <div class="ride-info-item"><div><span class="label">集合時間</span>${r.time}</div></div>
-          <div class="ride-info-item" style="grid-column:1/-1"><div><span class="label">集合地點</span>${r.location}</div></div>
         </div>
+        <div class="ride-location-row">
+          <div>
+            <div style="font-size:11px;color:#999;margin-bottom:2px">第一集合點</div>
+            <div style="font-size:14px;font-weight:500">${locName}</div>
+            ${locAddr && locAddr !== locName ? `<div style="font-size:12px;color:#888">${locAddr}</div>` : ''}
+          </div>
+          <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locAddr||locName)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+        </div>
+        ${r.location2 ? `
+        <div class="ride-location-row" style="margin-top:8px">
+          <div>
+            <div style="font-size:11px;color:#999;margin-bottom:2px">第二集合點</div>
+            <div style="font-size:14px;font-weight:500">${loc2Name}</div>
+            ${loc2Addr && loc2Addr !== loc2Name ? `<div style="font-size:12px;color:#888">${loc2Addr}</div>` : ''}
+          </div>
+          <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc2Addr||loc2Name)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+        </div>` : ''}
+        ${r.strava_url ? `
+          <a href="${r.strava_url}" target="_blank" class="route-card strava-card">
+            <div class="route-icon">🟠</div>
+            <div class="route-info">
+              <div class="route-label">Strava 路線</div>
+              <div class="route-url">${r.strava_url.replace('https://','').slice(0,40)}...</div>
+            </div>
+            <div class="route-arrow">→</div>
+          </a>` : ''}
+        ${r.garmin_url ? `
+          <a href="${r.garmin_url}" target="_blank" class="route-card garmin-card">
+            <div class="route-icon">🔵</div>
+            <div class="route-info">
+              <div class="route-label">Garmin Connect 路線</div>
+              <div class="route-url">${r.garmin_url.replace('https://','').slice(0,40)}...</div>
+            </div>
+            <div class="route-arrow">→</div>
+          </a>` : ''}
         ${r.garmin_code ? `
           <div class="garmin-row">
             <div>
@@ -233,7 +379,8 @@ async function renderRides(){
           </div>` : ''}
         ${r.note ? `<div class="ride-note">📝 ${r.note}</div>` : ''}
         ${isAdmin ? `<div class="ride-admin-row"><button class="delete-btn" onclick="deleteRide('${r.id}')">刪除</button></div>` : ''}
-      </div>`).join('')
+      </div>`
+    }).join('')
 }
 
 function copyCode(code){
@@ -247,14 +394,18 @@ async function saveRide(){
   const title = document.getElementById('ride-title').value.trim()
   const date = document.getElementById('ride-date').value
   const time = document.getElementById('ride-time').value
-  const location = document.getElementById('ride-location').value.trim()
-  if(!title || !date || !time || !location){ showToast('請填寫標題、日期、時間和地點'); return }
+  const location1 = getLocationValue('1')
+  if(!title || !date || !time || !location1){ showToast('請填寫標題、日期、時間和第一集合點'); return }
   const { error } = await db.from('rides').insert({
-    title, date, time, location,
+    title, date, time,
+    location: location1,
+    location2: getLocationValue('2'),
     garmin_code: document.getElementById('ride-garmin').value.trim(),
+    strava_url: document.getElementById('ride-strava').value.trim(),
+    garmin_url: document.getElementById('ride-garmin-url').value.trim(),
     note: document.getElementById('ride-note').value.trim()
   })
-  if(error){ showToast('發布失敗，請再試一次'); return }
+  if(error){ showToast('發布失敗，請再試一次'); console.error(error); return }
   showToast('✅ 團騎公告發布成功！')
   hideRideForm()
   renderRides()
@@ -282,9 +433,10 @@ async function renderAdmin(){
           ${avatarEl(r.avatar_url, r.name, 40)}
           <div class="admin-info">
             <div class="admin-name">${r.name}</div>
-            <div class="admin-meta">申請時間：${timeAgo(r.updated_at)}</div>
+            <div class="admin-meta">FTP ${r.ftp||'未填'}W · ${r.weight||'未填'}kg${r.ftp&&r.weight?' · '+(r.ftp/r.weight).toFixed(2)+' W/kg':''}</div>
           </div>
         </div>
+        ${r.mood ? `<div class="rider-mood" style="margin-bottom:8px">💬 ${r.mood}</div>` : ''}
         <div class="admin-actions">
           <button class="approve-btn" onclick="approveMember('${r.line_user_id}')">✅ 核准</button>
           <button class="kick-btn" onclick="kickMember('${r.line_user_id}')">❌ 拒絕</button>
@@ -295,8 +447,6 @@ async function renderAdmin(){
     ? `<div class="empty-state">沒有已核准的成員</div>`
     : approved.map(r => {
       const status = activityStatus(r.last_seen)
-      const ftpAge = timeAgo(r.updated_at)
-      const lastSeen = timeAgo(r.last_seen)
       return `<div class="admin-card">
         <div class="admin-card-top">
           ${avatarEl(r.avatar_url, r.name, 40)}
@@ -306,15 +456,48 @@ async function renderAdmin(){
           </div>
         </div>
         <div class="admin-stats-row">
-          <div class="admin-stat"><div class="val">${r.ftp || '—'}W</div><div class="lbl">FTP</div></div>
-          <div class="admin-stat"><div class="val">${ftpAge}</div><div class="lbl">上次更新資料</div></div>
-          <div class="admin-stat"><div class="val">${lastSeen}</div><div class="lbl">上次上線</div></div>
+          <div class="admin-stat"><div class="val">${r.ftp||'—'}W</div><div class="lbl">FTP</div></div>
+          <div class="admin-stat"><div class="val">${timeAgo(r.updated_at)}</div><div class="lbl">上次更新資料</div></div>
+          <div class="admin-stat"><div class="val">${timeAgo(r.last_seen)}</div><div class="lbl">上次上線</div></div>
         </div>
         <div class="admin-actions">
           <button class="kick-btn" onclick="kickMember('${r.line_user_id}')">踢除成員</button>
         </div>
       </div>`
     }).join('')
+
+  renderLocationAdmin()
+}
+
+async function renderLocationAdmin(){
+  const { data } = await db.from('locations').select('*').order('sort_order')
+  document.getElementById('location-list').innerHTML = (data||[]).map(l => `
+    <div class="admin-card" style="display:flex;align-items:center;gap:10px">
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600">${l.name}</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">${l.address}</div>
+      </div>
+      <button class="delete-btn" onclick="deleteLocation('${l.id}')">刪除</button>
+    </div>`).join('')
+}
+
+async function saveLocation(){
+  const name = document.getElementById('loc-name').value.trim()
+  const address = document.getElementById('loc-address').value.trim()
+  if(!name || !address){ showToast('請填寫地點名稱和地址'); return }
+  await db.from('locations').insert({ name, address, sort_order: 99 })
+  document.getElementById('loc-name').value = ''
+  document.getElementById('loc-address').value = ''
+  showToast('✅ 地點已新增！')
+  await loadLocations()
+  renderLocationAdmin()
+}
+
+async function deleteLocation(id){
+  await db.from('locations').delete().eq('id', id)
+  showToast('已刪除')
+  await loadLocations()
+  renderLocationAdmin()
 }
 
 async function approveMember(lineUserId){
@@ -393,7 +576,7 @@ function switchTab(id){
 
 function switchAdminTab(id){
   document.querySelectorAll('.admin-tab').forEach((b,i) => {
-    b.classList.toggle('active', ['pending','active'][i] === id)
+    b.classList.toggle('active', ['pending','active','locations'][i] === id)
   })
   document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'))
   document.getElementById('admin-'+id).classList.add('active')
