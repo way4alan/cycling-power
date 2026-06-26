@@ -12,6 +12,32 @@ let allLocations = []
 let currentFilter = 'all'
 let isAdmin = false
 
+const TIRE_COEFFICIENTS = {
+  25: { front: 0.91, rear: 1.35 },
+  26: { front: 0.87, rear: 1.29 },
+  28: { front: 0.79, rear: 1.18 },
+  29: { front: 0.75, rear: 1.12 },
+  30: { front: 0.72, rear: 1.07 },
+  32: { front: 0.66, rear: 0.98 }
+}
+
+function calcTirePressure(weight, tireWidth){
+  const coef = TIRE_COEFFICIENTS[tireWidth]
+  if(!coef || !weight) return null
+  const openFront = Math.round(weight * coef.front)
+  const openRear = Math.round(weight * coef.rear)
+  return {
+    open: {
+      front: { low: openFront, high: openFront + 5 },
+      rear: { low: openRear, high: openRear + 3 }
+    },
+    tubeless: {
+      front: { low: openFront - 10, high: openFront - 5 },
+      rear: { low: openRear - 10, high: openRear - 7 }
+    }
+  }
+}
+
 function wkg(r){ return r.ftp / r.weight }
 function wkgStr(r){ return wkg(r).toFixed(2) }
 function cat(v){
@@ -64,23 +90,18 @@ async function init(){
       name: profile.displayName,
       avatar_url: profile.pictureUrl
     }
-
     const { data: me } = await db.from('riders')
       .select('*').eq('line_user_id', myProfile.line_user_id).single()
     myData = me
-
     document.getElementById('loading').style.display = 'none'
-
     if(!me){
       showPendingForm(false)
       return
     }
-
     if(me.status === 'pending'){
       showPendingForm(true, me)
       return
     }
-
     await updateLastSeen()
     isAdmin = me.is_admin === true
     document.getElementById('app').style.display = 'block'
@@ -91,6 +112,7 @@ async function init(){
     renderMatch()
     renderProfile()
     renderRides()
+    renderPace()
     if(isAdmin) renderAdmin()
   } catch(e){
     document.querySelector('.loading-text').textContent = '載入失敗，請重新整理'
@@ -104,32 +126,38 @@ function showPendingForm(existing, me){
   const ftp = me?.ftp || ''
   const weight = me?.weight || ''
   const mood = me?.mood || ''
-  screen.innerHTML = `
-    <div class="pending-wrap">
-      <div class="pending-icon">🚴</div>
-      <h2>${existing ? '審核中' : '申請加入'}</h2>
-      <p>${existing ? '你的申請正在等待管理員審核，你可以先填好資料，審核通過後立即出現在排行榜！' : '請填寫你的資料，送出後等待管理員審核。'}</p>
-      <div class="pending-form">
-        <div class="form-row">
-          <label>FTP（瓦特）</label>
-          <input type="number" id="p-ftp" placeholder="例如 280" value="${ftp}" oninput="updatePendingPreview()">
-        </div>
-        <div class="form-row">
-          <label>體重（kg）</label>
-          <input type="number" id="p-weight" placeholder="例如 70" value="${weight}" oninput="updatePendingPreview()">
-        </div>
-        <div class="wkg-preview" id="p-wkg-preview" style="display:${ftp&&weight?'flex':'none'}">
-          <span id="p-preview-val">${ftp&&weight?(ftp/weight).toFixed(2):'—'}</span> W/kg
-          <span class="cat-badge" id="p-preview-cat"></span>
-        </div>
-        <div class="form-row">
-          <label>心情小語（選填）</label>
-          <input type="text" id="p-mood" placeholder="例如：新手上路 🙏" maxlength="30" value="${mood}">
-        </div>
-        <button class="save-btn" onclick="savePendingProfile()">${existing ? '💾 更新資料' : '📨 送出申請'}</button>
+  const tireWidth = me?.tire_width || ''
+  screen.querySelector('.pending-wrap').innerHTML = `
+    <div class="pending-icon">🚴</div>
+    <h2>${existing ? '審核中' : '申請加入 PACE'}</h2>
+    <p>${existing ? '你的申請正在等待管理員審核，先填好資料，審核通過後立即出現在排行榜！' : '請填寫你的資料，送出後等待管理員審核。'}</p>
+    <div class="pending-form">
+      <div class="form-row">
+        <label>FTP（瓦特）</label>
+        <input type="number" id="p-ftp" placeholder="例如 280" value="${ftp}" oninput="updatePendingPreview()">
       </div>
-      ${existing ? '<p class="pending-sub" style="margin-top:16px">審核通過後重新開啟 App 即可使用。</p>' : ''}
-    </div>`
+      <div class="form-row">
+        <label>體重（kg）</label>
+        <input type="number" id="p-weight" placeholder="例如 70" value="${weight}" oninput="updatePendingPreview()">
+      </div>
+      <div class="wkg-preview" id="p-wkg-preview" style="display:${ftp&&weight?'flex':'none'}">
+        <span id="p-preview-val">${ftp&&weight?(ftp/weight).toFixed(2):'—'}</span> W/kg
+        <span class="cat-badge" id="p-preview-cat"></span>
+      </div>
+      <div class="form-row">
+        <label>胎寬</label>
+        <select id="p-tire">
+          <option value="">請選擇胎寬</option>
+          ${[25,26,28,29,30,32].map(w=>`<option value="${w}" ${tireWidth==w?'selected':''}>${w}c</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>心情小語（選填）</label>
+        <input type="text" id="p-mood" placeholder="例如：新手上路 🙏" maxlength="30" value="${mood}">
+      </div>
+      <button class="save-btn" onclick="savePendingProfile()">${existing ? '💾 更新資料' : '📨 送出申請'}</button>
+    </div>
+    ${existing ? '<p class="pending-sub" style="margin-top:16px">審核通過後重新開啟 App 即可使用。</p>' : ''}`
   if(ftp && weight) updatePendingPreview()
 }
 
@@ -154,12 +182,13 @@ async function savePendingProfile(){
   const ftp = parseInt(document.getElementById('p-ftp').value)
   const weight = parseFloat(document.getElementById('p-weight').value)
   if(!ftp || !weight){ showToast('請填寫 FTP 和體重'); return }
-  const mood = document.getElementById('p-mood').value.trim()
   const payload = {
     line_user_id: myProfile.line_user_id,
     name: myProfile.name,
     avatar_url: myProfile.avatar_url,
-    ftp, weight, mood,
+    ftp, weight,
+    tire_width: parseInt(document.getElementById('p-tire').value) || null,
+    mood: document.getElementById('p-mood').value.trim(),
     status: 'pending',
     updated_at: new Date().toISOString()
   }
@@ -217,7 +246,7 @@ function handleLocationChange(num){
 
 function getLocationValue(num){
   const sel = document.getElementById(`ride-location${num}`)
-  if(!sel.value || sel.value === '') return ''
+  if(!sel || !sel.value || sel.value === '') return ''
   if(sel.value === '__custom__'){
     return document.getElementById(`ride-location${num}-custom`).value.trim()
   }
@@ -235,7 +264,7 @@ function renderLeaderboard(){
   document.getElementById('avg-wkg').textContent = avgW
   document.getElementById('member-count').textContent = validRiders.length
   const medals = ['🥇','🥈','🥉']
-  document.getElementById('rider-list').innerHTML = filtered.map((r, i) => {
+  document.getElementById('rider-list').innerHTML = filtered.map((r) => {
     const rank = sorted.indexOf(r)
     const isMe = myProfile && r.line_user_id === myProfile.line_user_id
     const w = wkg(r)
@@ -306,6 +335,7 @@ function renderProfile(){
     document.getElementById('inp-ftp').value = me.ftp || ''
     document.getElementById('inp-weight').value = me.weight || ''
     document.getElementById('inp-mood').value = me.mood || ''
+    if(me.tire_width) document.getElementById('inp-tire').value = me.tire_width
     if(me.z1) document.getElementById('z1').value = me.z1
     if(me.z2) document.getElementById('z2').value = me.z2
     if(me.z3) document.getElementById('z3').value = me.z3
@@ -313,6 +343,70 @@ function renderProfile(){
     if(me.z5) document.getElementById('z5').value = me.z5
     updatePreview()
   }
+}
+
+async function renderPace(){
+  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id) || myData
+  const weight = me?.weight
+  const tireWidth = me?.tire_width
+  const pressure = calcTirePressure(weight, tireWidth)
+  const tireDisplay = document.getElementById('tire-pressure-display')
+  if(!pressure){
+    tireDisplay.innerHTML = `<div class="tire-setup-hint">請至「我的資料」填寫體重和胎寬</div>`
+  } else {
+    tireDisplay.innerHTML = `
+      <div style="text-align:center;margin-bottom:10px">
+        <span class="tire-width-badge">${tireWidth}c · ${weight}kg</span>
+      </div>
+      <div class="tire-grid">
+        <div class="tire-card open">
+          <div class="tire-card-title">Open 胎</div>
+          <div class="tire-wheel-row">
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">前輪</div>
+              <div class="tire-psi">${pressure.open.front.low}</div>
+              <div class="tire-psi-range">~${pressure.open.front.high} psi</div>
+            </div>
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">後輪</div>
+              <div class="tire-psi">${pressure.open.rear.low}</div>
+              <div class="tire-psi-range">~${pressure.open.rear.high} psi</div>
+            </div>
+          </div>
+        </div>
+        <div class="tire-card tubeless">
+          <div class="tire-card-title">Tubeless</div>
+          <div class="tire-wheel-row">
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">前輪</div>
+              <div class="tire-psi">${pressure.tubeless.front.low}</div>
+              <div class="tire-psi-range">~${pressure.tubeless.front.high} psi</div>
+            </div>
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">後輪</div>
+              <div class="tire-psi">${pressure.tubeless.rear.low}</div>
+              <div class="tire-psi-range">~${pressure.tubeless.rear.high} psi</div>
+            </div>
+          </div>
+        </div>
+      </div>`
+  }
+  const { data: guidelines } = await db.from('guidelines').select('*').order('sort_order')
+  document.getElementById('guidelines-list').innerHTML = (guidelines||[]).map((g,i) => `
+    <div class="guideline-item">
+      <div class="guideline-header" onclick="toggleGuideline(${i})">
+        <span class="guideline-title">${g.category}</span>
+        <span class="guideline-arrow" id="arrow-${i}">▼</span>
+      </div>
+      <div class="guideline-body" id="guideline-body-${i}">${g.content}</div>
+    </div>`).join('')
+}
+
+function toggleGuideline(i){
+  const body = document.getElementById(`guideline-body-${i}`)
+  const arrow = document.getElementById(`arrow-${i}`)
+  body.classList.toggle('open')
+  arrow.classList.toggle('open')
 }
 
 async function renderRides(){
@@ -467,6 +561,7 @@ async function renderAdmin(){
     }).join('')
 
   renderLocationAdmin()
+  renderGuidelineAdmin()
 }
 
 async function renderLocationAdmin(){
@@ -498,6 +593,59 @@ async function deleteLocation(id){
   showToast('已刪除')
   await loadLocations()
   renderLocationAdmin()
+}
+
+async function renderGuidelineAdmin(){
+  const { data } = await db.from('guidelines').select('*').order('sort_order')
+  document.getElementById('guideline-admin-list').innerHTML = (data||[]).map(g => `
+    <div class="guideline-edit-card">
+      <div class="guideline-edit-title">${g.category}</div>
+      <div class="guideline-edit-preview">${g.content.slice(0,60)}...</div>
+      <div class="guideline-edit-actions">
+        <button class="edit-btn" onclick="editGuideline('${g.id}', \`${g.category.replace(/`/g,"'")}\`, \`${g.content.replace(/`/g,"'")}\`)">✏️ 編輯</button>
+        <button class="delete-btn" onclick="deleteGuideline('${g.id}')">刪除</button>
+      </div>
+    </div>`).join('')
+}
+
+async function saveGuideline(){
+  const category = document.getElementById('gl-category').value.trim()
+  const content = document.getElementById('gl-content').value.trim()
+  if(!category || !content){ showToast('請填寫分類名稱和內容'); return }
+  await db.from('guidelines').insert({ category, content, sort_order: 99 })
+  document.getElementById('gl-category').value = ''
+  document.getElementById('gl-content').value = ''
+  showToast('✅ 已新增！')
+  renderGuidelineAdmin()
+  renderPace()
+}
+
+async function deleteGuideline(id){
+  await db.from('guidelines').delete().eq('id', id)
+  showToast('已刪除')
+  renderGuidelineAdmin()
+  renderPace()
+}
+
+function editGuideline(id, category, content){
+  document.getElementById('gl-category').value = category
+  document.getElementById('gl-content').value = content
+  const btn = document.querySelector('#admin-guidelines .save-btn')
+  btn.textContent = '💾 更新內容'
+  btn.onclick = async () => {
+    const newCategory = document.getElementById('gl-category').value.trim()
+    const newContent = document.getElementById('gl-content').value.trim()
+    if(!newCategory || !newContent){ showToast('請填寫分類名稱和內容'); return }
+    await db.from('guidelines').update({ category: newCategory, content: newContent }).eq('id', id)
+    showToast('✅ 已更新！')
+    btn.textContent = '新增分類'
+    btn.onclick = saveGuideline
+    document.getElementById('gl-category').value = ''
+    document.getElementById('gl-content').value = ''
+    renderGuidelineAdmin()
+    renderPace()
+  }
+  document.getElementById('gl-category').scrollIntoView({ behavior: 'smooth' })
 }
 
 async function approveMember(lineUserId){
@@ -542,6 +690,7 @@ async function saveProfile(){
     name: myProfile.name,
     avatar_url: myProfile.avatar_url,
     ftp, weight,
+    tire_width: parseInt(document.getElementById('inp-tire').value) || null,
     mood: document.getElementById('inp-mood').value.trim(),
     z1: parseInt(document.getElementById('z1').value) || 0,
     z2: parseInt(document.getElementById('z2').value) || 0,
@@ -556,6 +705,7 @@ async function saveProfile(){
   await loadRiders()
   renderLeaderboard()
   renderMatch()
+  renderPace()
 }
 
 function filterCat(v, el){
@@ -566,17 +716,20 @@ function filterCat(v, el){
 }
 
 function switchTab(id){
+  const tabs = ['leaderboard','match','pace','ride','profile','admin']
   document.querySelectorAll('.nav-btn').forEach((b,i) => {
-    b.classList.toggle('active', ['leaderboard','ride','match','profile','admin'][i] === id)
+    b.classList.toggle('active', tabs[i] === id)
   })
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
   document.getElementById('tab-'+id).classList.add('active')
   if(id === 'admin') renderAdmin()
+  if(id === 'pace') renderPace()
 }
 
 function switchAdminTab(id){
+  const tabs = ['pending','active','locations','guidelines']
   document.querySelectorAll('.admin-tab').forEach((b,i) => {
-    b.classList.toggle('active', ['pending','active','locations'][i] === id)
+    b.classList.toggle('active', tabs[i] === id)
   })
   document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'))
   document.getElementById('admin-'+id).classList.add('active')
