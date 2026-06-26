@@ -15,12 +15,7 @@
 </div>
 
 <div id="pending-screen" style="display:none">
-  <div class="pending-wrap">
-    <div class="pending-icon">⏳</div>
-    <h2>申請審核中</h2>
-    <p>你的加入申請已送出，請等待管理員審核。</p>
-    <p class="pending-sub">審核通過後重新開啟 App 即可使用。</p>
-  </div>
+  <div class="pending-wrap"></div>
 </div>
 
 <div id="app" style="display:none">
@@ -29,13 +24,17 @@
       <span class="nav-icon">🏆</span>
       <span class="nav-label">排行榜</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('ride')">
-      <span class="nav-icon">📍</span>
-      <span class="nav-label">團騎</span>
-    </button>
     <button class="nav-btn" onclick="switchTab('match')">
       <span class="nav-icon">⚡</span>
       <span class="nav-label">配對</span>
+    </button>
+    <button class="nav-btn pace-nav" onclick="switchTab('pace')">
+      <span class="nav-icon">🚴</span>
+      <span class="nav-label">PACE</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('ride')">
+      <span class="nav-icon">📍</span>
+      <span class="nav-label">團騎</span>
     </button>
     <button class="nav-btn" onclick="switchTab('profile')">
       <span class="nav-icon">👤</span>
@@ -73,6 +72,29 @@
         </div>
       </div>
       <div id="rider-list" class="rider-list"></div>
+    </div>
+
+    <div id="tab-match" class="tab-panel">
+      <div class="page-header"><h1>配對對手</h1></div>
+      <div class="match-me-card" id="match-me-card"></div>
+      <h2 class="section-title">最接近你的對手</h2>
+      <div id="match-list"></div>
+    </div>
+
+    <div id="tab-pace" class="tab-panel">
+      <div class="page-header"><h1>PACE</h1></div>
+
+      <div class="pace-section">
+        <div class="pace-section-title">🔧 胎壓建議</div>
+        <div id="tire-pressure-display">
+          <div class="tire-setup-hint">請至「我的資料」填寫體重和胎寬</div>
+        </div>
+      </div>
+
+      <div class="pace-section">
+        <div class="pace-section-title">📋 團規與技巧</div>
+        <div id="guidelines-list"></div>
+      </div>
     </div>
 
     <div id="tab-ride" class="tab-panel">
@@ -133,13 +155,6 @@
       <div id="ride-list"></div>
     </div>
 
-    <div id="tab-match" class="tab-panel">
-      <div class="page-header"><h1>配對對手</h1></div>
-      <div class="match-me-card" id="match-me-card"></div>
-      <h2 class="section-title">最接近你的對手</h2>
-      <div id="match-list"></div>
-    </div>
-
     <div id="tab-profile" class="tab-panel">
       <div class="page-header"><h1>我的資料</h1></div>
       <div class="profile-avatar-row" id="profile-avatar-row"></div>
@@ -155,6 +170,18 @@
         <div class="wkg-preview" id="wkg-preview" style="display:none">
           <span id="preview-val">—</span> W/kg
           <span class="cat-badge" id="preview-cat"></span>
+        </div>
+        <div class="form-row">
+          <label>胎寬</label>
+          <select id="inp-tire">
+            <option value="">請選擇胎寬</option>
+            <option value="25">25c</option>
+            <option value="26">26c</option>
+            <option value="28">28c</option>
+            <option value="29">29c</option>
+            <option value="30">30c</option>
+            <option value="32">32c</option>
+          </select>
         </div>
         <div class="form-row">
           <label>心情小語（顯示在排行榜）</label>
@@ -178,8 +205,9 @@
       <div class="page-header"><h1>成員管理</h1></div>
       <div class="admin-tabs">
         <button class="admin-tab active" onclick="switchAdminTab('pending')">待審核 <span id="pending-count" class="count-badge"></span></button>
-        <button class="admin-tab" onclick="switchAdminTab('active')">已核准成員</button>
+        <button class="admin-tab" onclick="switchAdminTab('active')">已核准</button>
         <button class="admin-tab" onclick="switchAdminTab('locations')">集合地點</button>
+        <button class="admin-tab" onclick="switchAdminTab('guidelines')">團規管理</button>
       </div>
       <div id="admin-pending" class="admin-panel active"></div>
       <div id="admin-active" class="admin-panel"></div>
@@ -196,6 +224,20 @@
           <button class="save-btn" onclick="saveLocation()">新增地點</button>
         </div>
         <div id="location-list"></div>
+      </div>
+      <div id="admin-guidelines" class="admin-panel">
+        <div class="form-card" style="margin-bottom:12px">
+          <div class="form-row">
+            <label>分類名稱</label>
+            <input type="text" id="gl-category" placeholder="例如：🏔️ 爬坡技巧">
+          </div>
+          <div class="form-row">
+            <label>內容</label>
+            <textarea id="gl-content" placeholder="輸入內容..." rows="5" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;font-size:14px;background:#fafafa;resize:vertical"></textarea>
+          </div>
+          <button class="save-btn" onclick="saveGuideline()">新增分類</button>
+        </div>
+        <div id="guideline-admin-list"></div>
       </div>
     </div>
   </div>
