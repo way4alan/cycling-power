@@ -13,12 +13,12 @@ let currentFilter = 'all'
 let isAdmin = false
 
 const TIRE_COEFFICIENTS = {
-  25: { front: 0.91, rear: 1.35 },
-  26: { front: 0.87, rear: 1.29 },
-  28: { front: 0.79, rear: 1.18 },
-  29: { front: 0.75, rear: 1.12 },
-  30: { front: 0.72, rear: 1.07 },
-  32: { front: 0.66, rear: 0.98 }
+  25: { front: 1.085, rear: 1.145 },
+  26: { front: 1.048, rear: 1.110 },
+  28: { front: 1.000, rear: 1.065 },
+  29: { front: 0.956, rear: 1.025 },
+  30: { front: 0.911, rear: 0.984 },
+  32: { front: 0.845, rear: 0.910 }
 }
 
 function calcTirePressure(weight, tireWidth){
@@ -27,13 +27,13 @@ function calcTirePressure(weight, tireWidth){
   const openFront = Math.round(weight * coef.front)
   const openRear = Math.round(weight * coef.rear)
   return {
-    open: {
-      front: { low: openFront, high: openFront + 5 },
-      rear: { low: openRear, high: openRear + 3 }
-    },
     tubeless: {
-      front: { low: openFront - 10, high: openFront - 5 },
-      rear: { low: openRear - 10, high: openRear - 7 }
+      front: { low: openFront - 2, high: openFront + 2 },
+      rear: { low: openRear - 2, high: openRear + 2 }
+    },
+    open: {
+      front: { low: openFront + 8, high: openFront + 12 },
+      rear: { low: openRear + 8, high: openRear + 12 }
     }
   }
 }
