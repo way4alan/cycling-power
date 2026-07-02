@@ -83,14 +83,12 @@
 
     <div id="tab-pace" class="tab-panel">
       <div class="page-header"><h1>PACE</h1></div>
-
       <div class="pace-section">
         <div class="pace-section-title">🔧 胎壓建議</div>
         <div id="tire-pressure-display">
           <div class="tire-setup-hint">請至「我的資料」填寫體重和胎寬</div>
         </div>
       </div>
-
       <div class="pace-section">
         <div class="pace-section-title">📋 團規與技巧</div>
         <div id="guidelines-list"></div>
@@ -107,15 +105,9 @@
           <label>活動標題</label>
           <input type="text" id="ride-title" placeholder="例如：週日晨騎">
         </div>
-        <div class="form-grid">
-          <div class="form-row">
-            <label>日期</label>
-            <input type="date" id="ride-date">
-          </div>
-          <div class="form-row">
-            <label>集合時間</label>
-            <input type="time" id="ride-time">
-          </div>
+     <div class="form-row">
+          <label>日期</label>
+          <input type="date" id="ride-date">
         </div>
         <div class="form-row">
           <label>第一集合點</label>
@@ -125,11 +117,27 @@
           <input type="text" id="ride-location1-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
         </div>
         <div class="form-row">
+          <label>第一集合點時間</label>
+          <input type="time" id="ride-time">
+        </div>
+        <div class="form-row">
           <label>第二集合點（選填）</label>
           <select id="ride-location2" onchange="handleLocationChange('2')">
             <option value="">不設第二集合點</option>
           </select>
           <input type="text" id="ride-location2-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
+        </div>
+        <div class="form-row">
+          <label>第二集合點時間（選填）</label>
+          <input type="time" id="ride-time2">
+        </div>
+        <div class="form-row">
+          <label>截止報名時間（選填）</label>
+          <input type="datetime-local" id="ride-deadline">
+        </div>
+        <div class="form-row">
+          <label>人數上限（選填）</label>
+          <input type="number" id="ride-max" placeholder="例如：20">
         </div>
         <div class="form-row">
           <label>Strava 路線連結（選填）</label>
@@ -158,6 +166,7 @@
     <div id="tab-profile" class="tab-panel">
       <div class="page-header"><h1>我的資料</h1></div>
       <div class="profile-avatar-row" id="profile-avatar-row"></div>
+      <div id="attendance-progress"></div>
       <div class="form-card">
         <div class="form-row">
           <label>FTP（瓦特）</label>
@@ -186,6 +195,15 @@
         <div class="form-row">
           <label>心情小語（顯示在排行榜）</label>
           <input type="text" id="inp-mood" placeholder="例如：今天腿很酸 😅" maxlength="30">
+        </div>
+        <div id="color-picker-section" style="display:none">
+          <div class="form-row">
+            <label>🎨 ID 文字顏色（出席10次解鎖）</label>
+            <div class="color-picker-row">
+              <input type="color" id="inp-name-color" value="#ffffff">
+              <span id="color-preview-text" style="font-size:16px;font-weight:600;margin-left:12px">預覽文字</span>
+            </div>
+          </div>
         </div>
         <div class="zone-section">
           <div class="zone-title">訓練區間功率（選填）</div>
