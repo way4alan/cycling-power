@@ -24,16 +24,16 @@ const TIRE_COEFFICIENTS = {
 function calcTirePressure(weight, tireWidth){
   const coef = TIRE_COEFFICIENTS[tireWidth]
   if(!coef || !weight) return null
-  const openFront = Math.round(weight * coef.front)
-  const openRear = Math.round(weight * coef.rear)
+  const tubFront = Math.round(weight * coef.front)
+  const tubRear = Math.round(weight * coef.rear)
   return {
     tubeless: {
-      front: { low: openFront - 2, high: openFront + 2 },
-      rear: { low: openRear - 2, high: openRear + 2 }
+      front: { low: tubFront - 2, high: tubFront + 2 },
+      rear: { low: tubRear - 2, high: tubRear + 2 }
     },
     open: {
-      front: { low: openFront + 8, high: openFront + 12 },
-      rear: { low: openRear + 8, high: openRear + 12 }
+      front: { low: tubFront + 8, high: tubFront + 12 },
+      rear: { low: tubRear + 8, high: tubRear + 12 }
     }
   }
 }
@@ -78,6 +78,37 @@ function showToast(msg){
   t.textContent = msg
   t.classList.add('show')
   setTimeout(() => t.classList.remove('show'), 2500)
+}
+
+function getNameStyle(rider){
+  const count = rider.attendance_count || 0
+  if(count >= 48) return 'rainbow-text'
+  if(count >= 20){
+    const color = rider.name_color || '#ffffff'
+    return `glow-name`
+  }
+  return ''
+}
+
+function getNameInlineStyle(rider){
+  const count = rider.attendance_count || 0
+  if(count >= 48) return ''
+  if(count >= 10 && rider.name_color){
+    const color = rider.name_color
+    if(count >= 20){
+      return `color:${color};text-shadow:0 0 8px ${color},0 0 16px ${color}`
+    }
+    return `color:${color}`
+  }
+  return ''
+}
+
+function getAttendanceBadge(count){
+  if(count >= 48) return '✨ PACE 傳奇'
+  if(count >= 30) return '🟠 精英成員'
+  if(count >= 20) return '🟣 資深騎手'
+  if(count >= 10) return '🔵 新銳騎士'
+  return ''
 }
 
 async function init(){
@@ -269,13 +300,24 @@ function renderLeaderboard(){
     const isMe = myProfile && r.line_user_id === myProfile.line_user_id
     const w = wkg(r)
     const ct = cat(w)
+    const count = r.attendance_count || 0
+    const badge = getAttendanceBadge(count)
+    const nameStyle = getNameInlineStyle(r)
+    const nameClass = count >= 48 ? 'rainbow-text' : ''
     return `<div class="rider-row${isMe ? ' is-me' : ''}">
       <div class="rider-main">
         <div class="rank">${rank < 3 ? medals[rank] : rank+1}</div>
         ${avatarEl(r.avatar_url, r.name)}
         <div class="rider-info">
-          <div class="rider-name">${r.name}${isMe ? '<span class="me-tag">我</span>' : ''}</div>
-          <div class="rider-cat"><span class="cat-badge ${ct.cls}">${ct.label}</span></div>
+          <div class="rider-name">
+            <span class="${nameClass}" style="${nameStyle}">${r.name}</span>
+            ${isMe ? '<span class="me-tag">我</span>' : ''}
+          </div>
+          <div class="rider-cat">
+            <span class="cat-badge ${ct.cls}">${ct.label}</span>
+            ${badge ? `<span class="attendance-badge">${badge}</span>` : ''}
+            ${count > 0 ? `<span style="font-size:11px;color:#999;margin-left:4px">${count}次出席</span>` : ''}
+          </div>
         </div>
         <div class="rider-stats">
           <div class="rider-ftp">${r.ftp} W</div>
@@ -332,6 +374,25 @@ function renderProfile(){
       <div class="profile-line">LINE 帳號已連結</div>
     </div>`
   if(me){
+    const count = me.attendance_count || 0
+    const next = count < 10 ? 10 : count < 20 ? 20 : count < 30 ? 30 : count < 48 ? 48 : null
+    const nextLabel = count < 10 ? '🎨 解鎖 ID 選色' : count < 20 ? '✨ 解鎖文字發光' : count < 30 ? '🟠 精英成員' : count < 48 ? '🌈 PACE 傳奇' : null
+    const progressEl = document.getElementById('attendance-progress')
+    if(next){
+      const pct = Math.round((count / next) * 100)
+      progressEl.innerHTML = `
+        <div class="attendance-progress">
+          <div class="progress-title">🚴 出席紀錄：${count} 次</div>
+          <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+          <div class="progress-text">${count} / ${next} 次</div>
+          <div class="progress-next">再 ${next - count} 次即可${nextLabel}！</div>
+        </div>`
+    } else {
+      progressEl.innerHTML = `
+        <div class="attendance-progress">
+          <div class="progress-title">✨ PACE 傳奇！出席 ${count} 次</div>
+        </div>`
+    }
     document.getElementById('inp-ftp').value = me.ftp || ''
     document.getElementById('inp-weight').value = me.weight || ''
     document.getElementById('inp-mood').value = me.mood || ''
@@ -342,11 +403,30 @@ function renderProfile(){
     if(me.z4) document.getElementById('z4').value = me.z4
     if(me.z5) document.getElementById('z5').value = me.z5
     updatePreview()
+    if(count >= 10){
+      const colorSection = document.getElementById('color-picker-section')
+      colorSection.style.display = 'block'
+      const colorInput = document.getElementById('inp-name-color')
+      colorInput.value = me.name_color || '#ffffff'
+      updateColorPreview()
+      colorInput.addEventListener('input', updateColorPreview)
+    }
+  }
+}
+
+function updateColorPreview(){
+  const color = document.getElementById('inp-name-color').value
+  const preview = document.getElementById('color-preview-text')
+  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
+  const count = me?.attendance_count || 0
+  preview.style.color = color
+  if(count >= 20){
+    preview.style.textShadow = `0 0 8px ${color},0 0 16px ${color}`
   }
 }
 
 async function renderPace(){
-  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id) || myData
+  const me = allRiders.find(r => r.line_user_id === myProfile?.line_user_id) || myData
   const weight = me?.weight
   const tireWidth = me?.tire_width
   const pressure = calcTirePressure(weight, tireWidth)
@@ -359,21 +439,6 @@ async function renderPace(){
         <span class="tire-width-badge">${tireWidth}c · ${weight}kg</span>
       </div>
       <div class="tire-grid">
-        <div class="tire-card open">
-          <div class="tire-card-title">Open 胎</div>
-          <div class="tire-wheel-row">
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">前輪</div>
-              <div class="tire-psi">${pressure.open.front.low}</div>
-              <div class="tire-psi-range">~${pressure.open.front.high} psi</div>
-            </div>
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">後輪</div>
-              <div class="tire-psi">${pressure.open.rear.low}</div>
-              <div class="tire-psi-range">~${pressure.open.rear.high} psi</div>
-            </div>
-          </div>
-        </div>
         <div class="tire-card tubeless">
           <div class="tire-card-title">Tubeless</div>
           <div class="tire-wheel-row">
@@ -386,6 +451,21 @@ async function renderPace(){
               <div class="tire-wheel-label">後輪</div>
               <div class="tire-psi">${pressure.tubeless.rear.low}</div>
               <div class="tire-psi-range">~${pressure.tubeless.rear.high} psi</div>
+            </div>
+          </div>
+        </div>
+        <div class="tire-card open">
+          <div class="tire-card-title">Open 胎</div>
+          <div class="tire-wheel-row">
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">前輪</div>
+              <div class="tire-psi">${pressure.open.front.low}</div>
+              <div class="tire-psi-range">~${pressure.open.front.high} psi</div>
+            </div>
+            <div class="tire-wheel">
+              <div class="tire-wheel-label">後輪</div>
+              <div class="tire-psi">${pressure.open.rear.low}</div>
+              <div class="tire-psi-range">~${pressure.open.rear.high} psi</div>
             </div>
           </div>
         </div>
@@ -413,68 +493,191 @@ async function renderRides(){
   const { data } = await db.from('rides').select('*').order('date', { ascending: true })
   const rides = data || []
   if(isAdmin) document.getElementById('add-ride-btn').style.display = 'block'
-  document.getElementById('ride-list').innerHTML = rides.length === 0
-    ? `<div class="empty-state">目前沒有團騎公告</div>`
-    : rides.map(r => {
-      const parts = r.location ? r.location.split('｜') : []
-      const locName = parts.length > 1 ? parts[0] : r.location
-      const locAddr = parts.length > 1 ? parts[1] : r.location
-      const loc2Parts = r.location2 ? r.location2.split('｜') : []
-      const loc2Name = loc2Parts.length > 1 ? loc2Parts[0] : r.location2
-      const loc2Addr = loc2Parts.length > 1 ? loc2Parts[1] : r.location2
-      return `<div class="ride-card">
-        <div class="ride-title">🚴 ${r.title}</div>
-        <div class="ride-info-grid">
-          <div class="ride-info-item"><div><span class="label">日期</span>${r.date}</div></div>
-          <div class="ride-info-item"><div><span class="label">集合時間</span>${r.time}</div></div>
+  if(rides.length === 0){
+    document.getElementById('ride-list').innerHTML = `<div class="empty-state">目前沒有團騎公告</div>`
+    return
+  }
+  const { data: myRegs } = await db.from('registrations')
+    .select('ride_id').eq('line_user_id', myProfile.line_user_id)
+  const myRegIds = new Set((myRegs||[]).map(r => r.ride_id))
+  const { data: allRegs } = await db.from('registrations').select('*')
+  document.getElementById('ride-list').innerHTML = rides.map(r => {
+    const parts = r.location ? r.location.split('｜') : []
+    const locName = parts.length > 1 ? parts[0] : r.location
+    const locAddr = parts.length > 1 ? parts[1] : r.location
+    const loc2Parts = r.location2 ? r.location2.split('｜') : []
+    const loc2Name = loc2Parts.length > 1 ? loc2Parts[0] : r.location2
+    const loc2Addr = loc2Parts.length > 1 ? loc2Parts[1] : r.location2
+    const rideRegs = (allRegs||[]).filter(reg => reg.ride_id === r.id)
+    const isRegistered = myRegIds.has(r.id)
+    const isFull = r.max_participants && rideRegs.length >= r.max_participants
+    const isPastDeadline = r.deadline && new Date(r.deadline) < new Date()
+    const avatarsHtml = rideRegs.slice(0,8).map(reg =>
+      reg.avatar_url
+        ? `<img src="${reg.avatar_url}" class="reg-avatar" title="${reg.name}">`
+        : `<div class="reg-avatar-placeholder" style="background:#534AB7;color:#fff" title="${reg.name}">${reg.name.slice(0,2)}</div>`
+    ).join('')
+    return `<div class="ride-card">
+      <div class="ride-title">🚴 ${r.title}</div>
+      <div style="font-size:13px;color:#666;margin-bottom:10px">📅 ${r.date}</div>
+      <div class="ride-location-row">
+        <div>
+          <div style="font-size:11px;color:#999;margin-bottom:2px">第一集合點 ${r.time ? '· ⏰ '+r.time : ''}</div>
+          <div style="font-size:14px;font-weight:500">${locName}</div>
+          ${locAddr && locAddr !== locName ? `<div style="font-size:12px;color:#888">${locAddr}</div>` : ''}
         </div>
-        <div class="ride-location-row">
-          <div>
-            <div style="font-size:11px;color:#999;margin-bottom:2px">第一集合點</div>
-            <div style="font-size:14px;font-weight:500">${locName}</div>
-            ${locAddr && locAddr !== locName ? `<div style="font-size:12px;color:#888">${locAddr}</div>` : ''}
-          </div>
-          <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locAddr||locName)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+        <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locAddr||locName)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+      </div>
+      ${r.location2 ? `
+      <div class="ride-location-row" style="margin-top:6px">
+        <div>
+          <div style="font-size:11px;color:#999;margin-bottom:2px">第二集合點 ${r.time2 ? '· ⏰ '+r.time2 : ''}</div>
+          <div style="font-size:14px;font-weight:500">${loc2Name}</div>
+          ${loc2Addr && loc2Addr !== loc2Name ? `<div style="font-size:12px;color:#888">${loc2Addr}</div>` : ''}
         </div>
-        ${r.location2 ? `
-        <div class="ride-location-row" style="margin-top:8px">
-          <div>
-            <div style="font-size:11px;color:#999;margin-bottom:2px">第二集合點</div>
-            <div style="font-size:14px;font-weight:500">${loc2Name}</div>
-            ${loc2Addr && loc2Addr !== loc2Name ? `<div style="font-size:12px;color:#888">${loc2Addr}</div>` : ''}
+        <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc2Addr||loc2Name)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+      </div>` : ''}
+      ${r.strava_url ? `
+        <a href="${r.strava_url}" target="_blank" class="route-card strava-card">
+          <div class="route-icon">🟠</div>
+          <div class="route-info">
+            <div class="route-label">Strava 路線</div>
+            <div class="route-url">${r.strava_url.replace('https://','').slice(0,40)}...</div>
           </div>
-          <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc2Addr||loc2Name)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
+          <div class="route-arrow">→</div>
+        </a>` : ''}
+      ${r.garmin_url ? `
+        <a href="${r.garmin_url}" target="_blank" class="route-card garmin-card">
+          <div class="route-icon">🔵</div>
+          <div class="route-info">
+            <div class="route-label">Garmin Connect 路線</div>
+            <div class="route-url">${r.garmin_url.replace('https://','').slice(0,40)}...</div>
+          </div>
+          <div class="route-arrow">→</div>
+        </a>` : ''}
+      ${r.garmin_code ? `
+        <div class="garmin-row">
+          <div>
+            <div style="font-size:11px;color:#666;margin-bottom:2px">Garmin Code</div>
+            <div class="garmin-code">${r.garmin_code}</div>
+          </div>
+          <button class="copy-btn" onclick="copyCode('${r.garmin_code}')">複製</button>
         </div>` : ''}
-        ${r.strava_url ? `
-          <a href="${r.strava_url}" target="_blank" class="route-card strava-card">
-            <div class="route-icon">🟠</div>
-            <div class="route-info">
-              <div class="route-label">Strava 路線</div>
-              <div class="route-url">${r.strava_url.replace('https://','').slice(0,40)}...</div>
-            </div>
-            <div class="route-arrow">→</div>
-          </a>` : ''}
-        ${r.garmin_url ? `
-          <a href="${r.garmin_url}" target="_blank" class="route-card garmin-card">
-            <div class="route-icon">🔵</div>
-            <div class="route-info">
-              <div class="route-label">Garmin Connect 路線</div>
-              <div class="route-url">${r.garmin_url.replace('https://','').slice(0,40)}...</div>
-            </div>
-            <div class="route-arrow">→</div>
-          </a>` : ''}
-        ${r.garmin_code ? `
-          <div class="garmin-row">
-            <div>
-              <div style="font-size:11px;color:#666;margin-bottom:2px">Garmin Code</div>
-              <div class="garmin-code">${r.garmin_code}</div>
-            </div>
-            <button class="copy-btn" onclick="copyCode('${r.garmin_code}')">複製</button>
-          </div>` : ''}
-        ${r.note ? `<div class="ride-note">📝 ${r.note}</div>` : ''}
-        ${isAdmin ? `<div class="ride-admin-row"><button class="delete-btn" onclick="deleteRide('${r.id}')">刪除</button></div>` : ''}
-      </div>`
-    }).join('')
+      ${r.note ? `<div class="ride-note">📝 ${r.note}</div>` : ''}
+      <div class="registration-section">
+        <div class="reg-count">已報名 ${rideRegs.length} 人${r.max_participants ? ' / 上限 '+r.max_participants+' 人' : ''}</div>
+        ${avatarsHtml ? `<div class="reg-avatars">${avatarsHtml}</div>` : ''}
+        ${isFull && !isRegistered
+          ? `<div class="reg-full">⚠️ 報名已滿</div>`
+          : isPastDeadline && !isRegistered
+          ? `<div class="reg-full">⚠️ 報名已截止</div>`
+          : `<button class="reg-btn${isRegistered ? ' registered' : ''}" onclick="toggleRegistration('${r.id}', ${isRegistered})">
+              ${isRegistered ? '✅ 已報名（點擊取消）' : '＋ 我要報名'}
+            </button>`
+        }
+        ${r.deadline ? `<div class="reg-deadline">截止時間：${new Date(r.deadline).toLocaleString('zh-TW')}</div>` : ''}
+        ${isAdmin ? `
+          <div class="ride-admin-row">
+            <button class="edit-btn" onclick="showAttendancePanel('${r.id}')">📋 出席審核</button>
+            <button class="delete-btn" onclick="deleteRide('${r.id}')">刪除</button>
+          </div>
+          <div id="attendance-panel-${r.id}" style="display:none;margin-top:10px"></div>` : ''}
+      </div>
+    </div>`
+  }).join('')
+}
+
+async function toggleRegistration(rideId, isRegistered){
+  if(isRegistered){
+    await db.from('registrations')
+      .delete()
+      .eq('ride_id', rideId)
+      .eq('line_user_id', myProfile.line_user_id)
+    showToast('已取消報名')
+  } else {
+    await db.from('registrations').insert({
+      ride_id: rideId,
+      line_user_id: myProfile.line_user_id,
+      name: myProfile.name,
+      avatar_url: myProfile.avatar_url
+    })
+    showToast('✅ 報名成功！')
+  }
+  renderRides()
+}
+
+async function showAttendancePanel(rideId){
+  const panel = document.getElementById(`attendance-panel-${rideId}`)
+  if(panel.style.display !== 'none'){
+    panel.style.display = 'none'
+    return
+  }
+  panel.style.display = 'block'
+  panel.innerHTML = '<div style="font-size:13px;color:#999">載入中...</div>'
+  const { data: regs } = await db.from('registrations').select('*').eq('ride_id', rideId)
+  const { data: atts } = await db.from('attendances').select('*').eq('ride_id', rideId)
+  const attIds = new Set((atts||[]).map(a => a.line_user_id))
+  const allMembers = [...(regs||[])]
+  allRiders.forEach(r => {
+    if(!allMembers.find(m => m.line_user_id === r.line_user_id)){
+      allMembers.push({ line_user_id: r.line_user_id, name: r.name, avatar_url: r.avatar_url })
+    }
+  })
+  panel.innerHTML = `
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📋 出席審核</div>
+    <div class="attend-list">
+      ${(regs||[]).map(m => `
+        <div class="attend-row">
+          ${avatarEl(m.avatar_url, m.name, 28)}
+          <span class="name">${m.name}</span>
+          <button class="attend-check${attIds.has(m.line_user_id) ? ' checked' : ''}"
+            onclick="toggleAttendance('${rideId}','${m.line_user_id}','${m.name}','${m.avatar_url||''}',this)">
+            ${attIds.has(m.line_user_id) ? '✅' : '○'}
+          </button>
+        </div>`).join('')}
+    </div>
+    <div style="font-size:13px;font-weight:600;margin:10px 0 6px">臨時加入</div>
+    <div class="add-attendee-row">
+      <select id="extra-member-${rideId}">
+        <option value="">選擇成員</option>
+        ${allRiders.filter(r => !(regs||[]).find(reg => reg.line_user_id === r.line_user_id))
+          .map(r => `<option value="${r.line_user_id}" data-name="${r.name}" data-avatar="${r.avatar_url||''}">${r.name}</option>`).join('')}
+      </select>
+      <button onclick="addExtraAttendee('${rideId}')">加入</button>
+    </div>`
+}
+
+async function toggleAttendance(rideId, lineUserId, name, avatarUrl, btn){
+  const isChecked = btn.classList.contains('checked')
+  if(isChecked){
+    await db.from('attendances').delete().eq('ride_id', rideId).eq('line_user_id', lineUserId)
+    await db.from('riders').update({ attendance_count: db.rpc('decrement', { x: 1 }) }).eq('line_user_id', lineUserId)
+    btn.classList.remove('checked')
+    btn.textContent = '○'
+    showToast('已取消出席')
+  } else {
+    await db.from('attendances').upsert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl })
+    const { data: rider } = await db.from('riders').select('attendance_count').eq('line_user_id', lineUserId).single()
+    const newCount = (rider?.attendance_count || 0) + 1
+    await db.from('riders').update({ attendance_count: newCount }).eq('line_user_id', lineUserId)
+    btn.classList.add('checked')
+    btn.textContent = '✅'
+    showToast('✅ 已確認出席')
+  }
+  await loadRiders()
+  renderLeaderboard()
+}
+
+async function addExtraAttendee(rideId){
+  const sel = document.getElementById(`extra-member-${rideId}`)
+  const lineUserId = sel.value
+  if(!lineUserId){ showToast('請選擇成員'); return }
+  const name = sel.options[sel.selectedIndex].getAttribute('data-name')
+  const avatarUrl = sel.options[sel.selectedIndex].getAttribute('data-avatar')
+  await db.from('registrations').upsert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl })
+  showToast(`✅ ${name} 已加入`)
+  showAttendancePanel(rideId)
+  showAttendancePanel(rideId)
 }
 
 function copyCode(code){
@@ -490,14 +693,19 @@ async function saveRide(){
   const time = document.getElementById('ride-time').value
   const location1 = getLocationValue('1')
   if(!title || !date || !time || !location1){ showToast('請填寫標題、日期、時間和第一集合點'); return }
+  const deadlineVal = document.getElementById('ride-deadline').value
+  const maxVal = document.getElementById('ride-max').value
   const { error } = await db.from('rides').insert({
     title, date, time,
+    time2: document.getElementById('ride-time2').value || '',
     location: location1,
     location2: getLocationValue('2'),
     garmin_code: document.getElementById('ride-garmin').value.trim(),
     strava_url: document.getElementById('ride-strava').value.trim(),
     garmin_url: document.getElementById('ride-garmin-url').value.trim(),
-    note: document.getElementById('ride-note').value.trim()
+    note: document.getElementById('ride-note').value.trim(),
+    deadline: deadlineVal ? new Date(deadlineVal).toISOString() : null,
+    max_participants: maxVal ? parseInt(maxVal) : null
   })
   if(error){ showToast('發布失敗，請再試一次'); console.error(error); return }
   showToast('✅ 團騎公告發布成功！')
@@ -518,7 +726,6 @@ async function renderAdmin(){
   const badge = document.getElementById('pending-count')
   badge.textContent = pending.length > 0 ? pending.length : ''
   badge.style.display = pending.length > 0 ? 'inline-block' : 'none'
-
   document.getElementById('admin-pending').innerHTML = pending.length === 0
     ? `<div class="empty-state">沒有待審核的成員</div>`
     : pending.map(r => `
@@ -536,7 +743,6 @@ async function renderAdmin(){
           <button class="kick-btn" onclick="kickMember('${r.line_user_id}')">❌ 拒絕</button>
         </div>
       </div>`).join('')
-
   document.getElementById('admin-active').innerHTML = approved.length === 0
     ? `<div class="empty-state">沒有已核准的成員</div>`
     : approved.map(r => {
@@ -554,12 +760,15 @@ async function renderAdmin(){
           <div class="admin-stat"><div class="val">${timeAgo(r.updated_at)}</div><div class="lbl">上次更新資料</div></div>
           <div class="admin-stat"><div class="val">${timeAgo(r.last_seen)}</div><div class="lbl">上次上線</div></div>
         </div>
+        <div class="admin-stats-row">
+          <div class="admin-stat"><div class="val">${r.attendance_count||0}</div><div class="lbl">出席次數</div></div>
+          <div class="admin-stat" style="grid-column:span 2"><div class="val">${getAttendanceBadge(r.attendance_count||0)||'—'}</div><div class="lbl">稱號</div></div>
+        </div>
         <div class="admin-actions">
           <button class="kick-btn" onclick="kickMember('${r.line_user_id}')">踢除成員</button>
         </div>
       </div>`
     }).join('')
-
   renderLocationAdmin()
   renderGuidelineAdmin()
 }
@@ -686,12 +895,15 @@ async function saveProfile(){
   const ftp = parseInt(document.getElementById('inp-ftp').value)
   const weight = parseFloat(document.getElementById('inp-weight').value)
   if(!ftp || !weight){ showToast('請填寫 FTP 和體重'); return }
+  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
+  const count = me?.attendance_count || 0
   const payload = {
     name: myProfile.name,
     avatar_url: myProfile.avatar_url,
     ftp, weight,
     tire_width: parseInt(document.getElementById('inp-tire').value) || null,
     mood: document.getElementById('inp-mood').value.trim(),
+    name_color: count >= 10 ? document.getElementById('inp-name-color').value : '',
     z1: parseInt(document.getElementById('z1').value) || 0,
     z2: parseInt(document.getElementById('z2').value) || 0,
     z3: parseInt(document.getElementById('z3').value) || 0,
