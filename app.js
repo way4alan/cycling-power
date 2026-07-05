@@ -1,6 +1,7 @@
 const SUPABASE_URL = 'https://yvgjaljdxmsmtljcmemp.supabase.co'
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2Z2phbGpkeG1zbXRsamNtZW1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMTExMDYsImV4cCI6MjA5NzY4NzEwNn0.Bpfwwf_MfG_foTVk1oc3tKf6oBP7_ShRM1Nu0hR-Pz0'
 const LIFF_ID = '2010470481-aY3CdaJS'
+const AQICN_TOKEN = 'f15e708e4ce8001151a24716eebf17567d06256c'
 
 const { createClient } = supabase
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -9,6 +10,7 @@ let myProfile = null
 let myData = null
 let allRiders = []
 let allLocations = []
+let allWeatherLocations = []
 let currentFilter = 'all'
 let isAdmin = false
 
@@ -36,6 +38,61 @@ function calcTirePressure(weight, tireWidth){
       rear: { low: tubRear + 8, high: tubRear + 12 }
     }
   }
+}
+
+function calcGroupSpeed(avgWkg){
+  if(!avgWkg) return null
+  const baseSpeed = 15 + (avgWkg * 5.2)
+  const groupBonus = baseSpeed * 0.18
+  const total = baseSpeed + groupBonus
+  return { solo: Math.round(baseSpeed), group: Math.round(total) }
+}
+
+function getWmoDescription(code){
+  const map = {
+    0:'☀️ 晴天', 1:'🌤️ 大致晴朗', 2:'⛅ 部分多雲', 3:'☁️ 陰天',
+    45:'🌫️ 有霧', 48:'🌫️ 有霧',
+    51:'🌦️ 毛毛雨', 53:'🌦️ 毛毛雨', 55:'🌦️ 毛毛雨',
+    61:'🌧️ 小雨', 63:'🌧️ 中雨', 65:'🌧️ 大雨',
+    71:'🌨️ 小雪', 73:'🌨️ 中雪', 75:'🌨️ 大雪',
+    80:'🌧️ 陣雨', 81:'🌧️ 陣雨', 82:'⛈️ 強陣雨',
+    95:'⛈️ 雷雨', 96:'⛈️ 雷雨', 99:'⛈️ 強雷雨'
+  }
+  return map[code] || '🌡️ 未知'
+}
+
+function getAqiDescription(aqi){
+  if(aqi <= 50) return { label:'優良', color:'#22c55e' }
+  if(aqi <= 100) return { label:'普通', color:'#f59e0b' }
+  if(aqi <= 150) return { label:'對敏感族群不健康', color:'#f97316' }
+  if(aqi <= 200) return { label:'不健康', color:'#ef4444' }
+  return { label:'非常不健康', color:'#9333ea' }
+}
+
+async function fetchWeather(lat, lng, date){
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max&timezone=Asia/Taipei&start_date=${date}&end_date=${date}`
+    const res = await fetch(url)
+    const data = await res.json()
+    if(!data.daily) return null
+    return {
+      code: data.daily.weathercode[0],
+      maxTemp: data.daily.temperature_2m_max[0],
+      minTemp: data.daily.temperature_2m_min[0],
+      rainProb: data.daily.precipitation_probability_max[0],
+      windSpeed: data.daily.windspeed_10m_max[0]
+    }
+  } catch(e){ return null }
+}
+
+async function fetchAqi(lat, lng){
+  try {
+    const url = `https://api.waqi.info/feed/geo:${lat};${lng}/?token=${AQICN_TOKEN}`
+    const res = await fetch(url)
+    const data = await res.json()
+    if(data.status !== 'ok') return null
+    return data.data.aqi
+  } catch(e){ return null }
 }
 
 function wkg(r){ return r.ftp / r.weight }
@@ -80,24 +137,12 @@ function showToast(msg){
   setTimeout(() => t.classList.remove('show'), 2500)
 }
 
-function getNameStyle(rider){
-  const count = rider.attendance_count || 0
-  if(count >= 48) return 'rainbow-text'
-  if(count >= 20){
-    const color = rider.name_color || '#ffffff'
-    return `glow-name`
-  }
-  return ''
-}
-
 function getNameInlineStyle(rider){
   const count = rider.attendance_count || 0
   if(count >= 48) return ''
   if(count >= 10 && rider.name_color){
     const color = rider.name_color
-    if(count >= 20){
-      return `color:${color};text-shadow:0 0 8px ${color},0 0 16px ${color}`
-    }
+    if(count >= 20) return `color:${color};text-shadow:0 0 8px ${color},0 0 16px ${color}`
     return `color:${color}`
   }
   return ''
@@ -125,19 +170,14 @@ async function init(){
       .select('*').eq('line_user_id', myProfile.line_user_id).single()
     myData = me
     document.getElementById('loading').style.display = 'none'
-    if(!me){
-      showPendingForm(false)
-      return
-    }
-    if(me.status === 'pending'){
-      showPendingForm(true, me)
-      return
-    }
+    if(!me){ showPendingForm(false); return }
+    if(me.status === 'pending'){ showPendingForm(true, me); return }
     await updateLastSeen()
     isAdmin = me.is_admin === true
     document.getElementById('app').style.display = 'block'
     if(isAdmin) document.getElementById('admin-nav-btn').style.display = 'flex'
     await loadLocations()
+    await loadWeatherLocations()
     await loadRiders()
     renderLeaderboard()
     renderMatch()
@@ -163,29 +203,19 @@ function showPendingForm(existing, me){
     <h2>${existing ? '審核中' : '申請加入 PACE'}</h2>
     <p>${existing ? '你的申請正在等待管理員審核，先填好資料，審核通過後立即出現在排行榜！' : '請填寫你的資料，送出後等待管理員審核。'}</p>
     <div class="pending-form">
-      <div class="form-row">
-        <label>FTP（瓦特）</label>
-        <input type="number" id="p-ftp" placeholder="例如 280" value="${ftp}" oninput="updatePendingPreview()">
-      </div>
-      <div class="form-row">
-        <label>體重（kg）</label>
-        <input type="number" id="p-weight" placeholder="例如 70" value="${weight}" oninput="updatePendingPreview()">
-      </div>
+      <div class="form-row"><label>FTP（瓦特）</label><input type="number" id="p-ftp" placeholder="例如 280" value="${ftp}" oninput="updatePendingPreview()"></div>
+      <div class="form-row"><label>體重（kg）</label><input type="number" id="p-weight" placeholder="例如 70" value="${weight}" oninput="updatePendingPreview()"></div>
       <div class="wkg-preview" id="p-wkg-preview" style="display:${ftp&&weight?'flex':'none'}">
         <span id="p-preview-val">${ftp&&weight?(ftp/weight).toFixed(2):'—'}</span> W/kg
         <span class="cat-badge" id="p-preview-cat"></span>
       </div>
-      <div class="form-row">
-        <label>胎寬</label>
+      <div class="form-row"><label>胎寬</label>
         <select id="p-tire">
           <option value="">請選擇胎寬</option>
           ${[25,26,28,29,30,32].map(w=>`<option value="${w}" ${tireWidth==w?'selected':''}>${w}c</option>`).join('')}
         </select>
       </div>
-      <div class="form-row">
-        <label>心情小語（選填）</label>
-        <input type="text" id="p-mood" placeholder="例如：新手上路 🙏" maxlength="30" value="${mood}">
-      </div>
+      <div class="form-row"><label>心情小語（選填）</label><input type="text" id="p-mood" placeholder="例如：新手上路 🙏" maxlength="30" value="${mood}"></div>
       <button class="save-btn" onclick="savePendingProfile()">${existing ? '💾 更新資料' : '📨 送出申請'}</button>
     </div>
     ${existing ? '<p class="pending-sub" style="margin-top:16px">審核通過後重新開啟 App 即可使用。</p>' : ''}`
@@ -204,9 +234,7 @@ function updatePendingPreview(){
     badge.textContent = ct.label
     badge.className = 'cat-badge ' + ct.cls
     preview.style.display = 'flex'
-  } else {
-    preview.style.display = 'none'
-  }
+  } else { preview.style.display = 'none' }
 }
 
 async function savePendingProfile(){
@@ -223,8 +251,7 @@ async function savePendingProfile(){
     status: 'pending',
     updated_at: new Date().toISOString()
   }
-  const { data: existing } = await db.from('riders')
-    .select('id').eq('line_user_id', myProfile.line_user_id).single()
+  const { data: existing } = await db.from('riders').select('id').eq('line_user_id', myProfile.line_user_id).single()
   if(existing){
     await db.from('riders').update(payload).eq('line_user_id', myProfile.line_user_id)
   } else {
@@ -234,18 +261,11 @@ async function savePendingProfile(){
 }
 
 async function updateLastSeen(){
-  await db.from('riders')
-    .update({ last_seen: new Date().toISOString() })
-    .eq('line_user_id', myProfile.line_user_id)
+  await db.from('riders').update({ last_seen: new Date().toISOString() }).eq('line_user_id', myProfile.line_user_id)
 }
 
 async function loadRiders(){
-  const { data } = await db.from('riders')
-    .select('*')
-    .eq('status', 'approved')
-    .gt('ftp', 0)
-    .gt('weight', 0)
-    .order('ftp', { ascending: false })
+  const { data } = await db.from('riders').select('*').eq('status', 'approved').gt('ftp', 0).gt('weight', 0).order('ftp', { ascending: false })
   allRiders = data || []
 }
 
@@ -253,6 +273,25 @@ async function loadLocations(){
   const { data } = await db.from('locations').select('*').order('sort_order')
   allLocations = data || []
   renderLocationSelects()
+}
+
+async function loadWeatherLocations(){
+  const { data } = await db.from('weather_locations').select('*').order('sort_order')
+  allWeatherLocations = data || []
+  renderWeatherLocationSelect()
+}
+
+function renderWeatherLocationSelect(){
+  const sel = document.getElementById('ride-weather-location')
+  if(!sel) return
+  const opts = allWeatherLocations.map(l => `<option value="${l.id}" data-lat="${l.lat}" data-lng="${l.lng}" data-name="${l.name}">${l.name}</option>`).join('')
+  sel.innerHTML = `<option value="">使用第一集合點天氣</option>${opts}<option value="__custom__">＋ 自訂座標</option>`
+}
+
+function handleWeatherLocationChange(){
+  const sel = document.getElementById('ride-weather-location')
+  const custom = document.getElementById('ride-weather-custom')
+  custom.style.display = sel.value === '__custom__' ? 'block' : 'none'
 }
 
 function renderLocationSelects(){
@@ -267,20 +306,14 @@ function renderLocationSelects(){
 function handleLocationChange(num){
   const sel = document.getElementById(`ride-location${num}`)
   const custom = document.getElementById(`ride-location${num}-custom`)
-  if(sel.value === '__custom__'){
-    custom.style.display = 'block'
-    custom.focus()
-  } else {
-    custom.style.display = 'none'
-  }
+  if(sel.value === '__custom__'){ custom.style.display = 'block'; custom.focus() }
+  else { custom.style.display = 'none' }
 }
 
 function getLocationValue(num){
   const sel = document.getElementById(`ride-location${num}`)
   if(!sel || !sel.value || sel.value === '') return ''
-  if(sel.value === '__custom__'){
-    return document.getElementById(`ride-location${num}-custom`).value.trim()
-  }
+  if(sel.value === '__custom__') return document.getElementById(`ride-location${num}-custom`).value.trim()
   const name = sel.options[sel.selectedIndex].getAttribute('data-name')
   return `${name}｜${sel.value}`
 }
@@ -316,7 +349,7 @@ function renderLeaderboard(){
           <div class="rider-cat">
             <span class="cat-badge ${ct.cls}">${ct.label}</span>
             ${badge ? `<span class="attendance-badge">${badge}</span>` : ''}
-            ${count > 0 ? `<span style="font-size:11px;color:#999;margin-left:4px">${count}次出席</span>` : ''}
+            ${count > 0 ? `<span style="font-size:11px;color:#999;margin-left:4px">${count}次</span>` : ''}
           </div>
         </div>
         <div class="rider-stats">
@@ -388,10 +421,7 @@ function renderProfile(){
           <div class="progress-next">再 ${next - count} 次即可${nextLabel}！</div>
         </div>`
     } else {
-      progressEl.innerHTML = `
-        <div class="attendance-progress">
-          <div class="progress-title">✨ PACE 傳奇！出席 ${count} 次</div>
-        </div>`
+      progressEl.innerHTML = `<div class="attendance-progress"><div class="progress-title">✨ PACE 傳奇！出席 ${count} 次</div></div>`
     }
     document.getElementById('inp-ftp').value = me.ftp || ''
     document.getElementById('inp-weight').value = me.weight || ''
@@ -420,9 +450,7 @@ function updateColorPreview(){
   const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
   const count = me?.attendance_count || 0
   preview.style.color = color
-  if(count >= 20){
-    preview.style.textShadow = `0 0 8px ${color},0 0 16px ${color}`
-  }
+  if(count >= 20) preview.style.textShadow = `0 0 8px ${color},0 0 16px ${color}`
 }
 
 async function renderPace(){
@@ -442,31 +470,15 @@ async function renderPace(){
         <div class="tire-card tubeless">
           <div class="tire-card-title">Tubeless</div>
           <div class="tire-wheel-row">
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">前輪</div>
-              <div class="tire-psi">${pressure.tubeless.front.low}</div>
-              <div class="tire-psi-range">~${pressure.tubeless.front.high} psi</div>
-            </div>
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">後輪</div>
-              <div class="tire-psi">${pressure.tubeless.rear.low}</div>
-              <div class="tire-psi-range">~${pressure.tubeless.rear.high} psi</div>
-            </div>
+            <div class="tire-wheel"><div class="tire-wheel-label">前輪</div><div class="tire-psi">${pressure.tubeless.front.low}</div><div class="tire-psi-range">~${pressure.tubeless.front.high} psi</div></div>
+            <div class="tire-wheel"><div class="tire-wheel-label">後輪</div><div class="tire-psi">${pressure.tubeless.rear.low}</div><div class="tire-psi-range">~${pressure.tubeless.rear.high} psi</div></div>
           </div>
         </div>
         <div class="tire-card open">
           <div class="tire-card-title">Open 胎</div>
           <div class="tire-wheel-row">
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">前輪</div>
-              <div class="tire-psi">${pressure.open.front.low}</div>
-              <div class="tire-psi-range">~${pressure.open.front.high} psi</div>
-            </div>
-            <div class="tire-wheel">
-              <div class="tire-wheel-label">後輪</div>
-              <div class="tire-psi">${pressure.open.rear.low}</div>
-              <div class="tire-psi-range">~${pressure.open.rear.high} psi</div>
-            </div>
+            <div class="tire-wheel"><div class="tire-wheel-label">前輪</div><div class="tire-psi">${pressure.open.front.low}</div><div class="tire-psi-range">~${pressure.open.front.high} psi</div></div>
+            <div class="tire-wheel"><div class="tire-wheel-label">後輪</div><div class="tire-psi">${pressure.open.rear.low}</div><div class="tire-psi-range">~${pressure.open.rear.high} psi</div></div>
           </div>
         </div>
       </div>`
@@ -497,11 +509,12 @@ async function renderRides(){
     document.getElementById('ride-list').innerHTML = `<div class="empty-state">目前沒有團騎公告</div>`
     return
   }
-  const { data: myRegs } = await db.from('registrations')
-    .select('ride_id').eq('line_user_id', myProfile.line_user_id)
+  const { data: myRegs } = await db.from('registrations').select('ride_id').eq('line_user_id', myProfile.line_user_id)
   const myRegIds = new Set((myRegs||[]).map(r => r.ride_id))
   const { data: allRegs } = await db.from('registrations').select('*')
-  document.getElementById('ride-list').innerHTML = rides.map(r => {
+  const { data: allAtts } = await db.from('attendances').select('*')
+
+  const rideCards = await Promise.all(rides.map(async r => {
     const parts = r.location ? r.location.split('｜') : []
     const locName = parts.length > 1 ? parts[0] : r.location
     const locAddr = parts.length > 1 ? parts[1] : r.location
@@ -509,6 +522,7 @@ async function renderRides(){
     const loc2Name = loc2Parts.length > 1 ? loc2Parts[0] : r.location2
     const loc2Addr = loc2Parts.length > 1 ? loc2Parts[1] : r.location2
     const rideRegs = (allRegs||[]).filter(reg => reg.ride_id === r.id)
+    const rideAtts = (allAtts||[]).filter(att => att.ride_id === r.id)
     const isRegistered = myRegIds.has(r.id)
     const isFull = r.max_participants && rideRegs.length >= r.max_participants
     const isPastDeadline = r.deadline && new Date(r.deadline) < new Date()
@@ -517,9 +531,64 @@ async function renderRides(){
         ? `<img src="${reg.avatar_url}" class="reg-avatar" title="${reg.name}">`
         : `<div class="reg-avatar-placeholder" style="background:#534AB7;color:#fff" title="${reg.name}">${reg.name.slice(0,2)}</div>`
     ).join('')
-    return `<div class="ride-card">
-      <div class="ride-title">🚴 ${r.title}</div>
+
+    let weatherHtml = ''
+    let lat = r.weather_lat
+    let lng = r.weather_lng
+    if(!lat || !lng){
+      const loc1Match = allLocations.find(l => locAddr && locAddr.includes(l.address))
+      const wLoc = allWeatherLocations.find(l => l.name === '高雄市區')
+      if(wLoc){ lat = wLoc.lat; lng = wLoc.lng }
+    }
+    if(lat && lng && r.date){
+      const [weather, aqi] = await Promise.all([
+        fetchWeather(lat, lng, r.date),
+        fetchAqi(lat, lng)
+      ])
+      if(weather){
+        const desc = getWmoDescription(weather.code)
+        const aqiDesc = aqi ? getAqiDescription(aqi) : null
+        weatherHtml = `
+          <div class="weather-card">
+            <div class="weather-location">📍 ${r.weather_location_name || locName} 天氣預報</div>
+            <div class="weather-main">
+              <div class="weather-desc">${desc}</div>
+              <div class="weather-temp">${weather.minTemp}°C ~ ${weather.maxTemp}°C</div>
+            </div>
+            <div class="weather-details">
+              <div class="weather-detail">💧 降雨 ${weather.rainProb}%</div>
+              <div class="weather-detail">💨 風速 ${weather.windSpeed} km/h</div>
+              ${aqiDesc ? `<div class="weather-detail" style="color:${aqiDesc.color}">🌫️ AQI ${aqi} ${aqiDesc.label}</div>` : ''}
+            </div>
+          </div>`
+      }
+    }
+
+    let groupStatsHtml = ''
+    if(rideAtts.length > 0){
+      const attRiders = rideAtts.map(a => allRiders.find(r => r.line_user_id === a.line_user_id)).filter(Boolean)
+      if(attRiders.length > 0){
+        const avgWkg = attRiders.reduce((s,r) => s+wkg(r), 0) / attRiders.length
+        const speeds = calcGroupSpeed(avgWkg)
+        groupStatsHtml = `
+          <div class="group-stats-card">
+            <div class="group-stats-title">📊 當天出席戰力分析</div>
+            <div class="group-stats-grid">
+              <div class="group-stat"><div class="val">${attRiders.length}</div><div class="lbl">出席人數</div></div>
+              <div class="group-stat"><div class="val">${avgWkg.toFixed(2)}</div><div class="lbl">平均 W/kg</div></div>
+              <div class="group-stat"><div class="val">${speeds.group} km/h</div><div class="lbl">集團巡航</div></div>
+            </div>
+          </div>`
+      }
+    }
+
+    return `<div class="ride-card" id="ride-${r.id}">
+      <div class="ride-header">
+        <div class="ride-title">🚴 ${r.title}</div>
+        ${isAdmin ? `<button class="edit-ride-btn" onclick="showEditRideForm('${r.id}')">✏️ 編輯</button>` : ''}
+      </div>
       <div style="font-size:13px;color:#666;margin-bottom:10px">📅 ${r.date}</div>
+      ${weatherHtml}
       <div class="ride-location-row">
         <div>
           <div style="font-size:11px;color:#999;margin-bottom:2px">第一集合點 ${r.time ? '· ⏰ '+r.time : ''}</div>
@@ -537,33 +606,11 @@ async function renderRides(){
         </div>
         <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc2Addr||loc2Name)}" target="_blank" class="nav-btn-link">🗺️ 導航</a>
       </div>` : ''}
-      ${r.strava_url ? `
-        <a href="${r.strava_url}" target="_blank" class="route-card strava-card">
-          <div class="route-icon">🟠</div>
-          <div class="route-info">
-            <div class="route-label">Strava 路線</div>
-            <div class="route-url">${r.strava_url.replace('https://','').slice(0,40)}...</div>
-          </div>
-          <div class="route-arrow">→</div>
-        </a>` : ''}
-      ${r.garmin_url ? `
-        <a href="${r.garmin_url}" target="_blank" class="route-card garmin-card">
-          <div class="route-icon">🔵</div>
-          <div class="route-info">
-            <div class="route-label">Garmin Connect 路線</div>
-            <div class="route-url">${r.garmin_url.replace('https://','').slice(0,40)}...</div>
-          </div>
-          <div class="route-arrow">→</div>
-        </a>` : ''}
-      ${r.garmin_code ? `
-        <div class="garmin-row">
-          <div>
-            <div style="font-size:11px;color:#666;margin-bottom:2px">Garmin Code</div>
-            <div class="garmin-code">${r.garmin_code}</div>
-          </div>
-          <button class="copy-btn" onclick="copyCode('${r.garmin_code}')">複製</button>
-        </div>` : ''}
+      ${r.strava_url ? `<a href="${r.strava_url}" target="_blank" class="route-card strava-card"><div class="route-icon">🟠</div><div class="route-info"><div class="route-label">Strava 路線</div><div class="route-url">${r.strava_url.replace('https://','').slice(0,40)}...</div></div><div class="route-arrow">→</div></a>` : ''}
+      ${r.garmin_url ? `<a href="${r.garmin_url}" target="_blank" class="route-card garmin-card"><div class="route-icon">🔵</div><div class="route-info"><div class="route-label">Garmin Connect 路線</div><div class="route-url">${r.garmin_url.replace('https://','').slice(0,40)}...</div></div><div class="route-arrow">→</div></a>` : ''}
+      ${r.garmin_code ? `<div class="garmin-row"><div><div style="font-size:11px;color:#666;margin-bottom:2px">Garmin Code</div><div class="garmin-code">${r.garmin_code}</div></div><button class="copy-btn" onclick="copyCode('${r.garmin_code}')">複製</button></div>` : ''}
       ${r.note ? `<div class="ride-note">📝 ${r.note}</div>` : ''}
+      ${groupStatsHtml}
       <div class="registration-section">
         <div class="reg-count">已報名 ${rideRegs.length} 人${r.max_participants ? ' / 上限 '+r.max_participants+' 人' : ''}</div>
         ${avatarsHtml ? `<div class="reg-avatars">${avatarsHtml}</div>` : ''}
@@ -583,24 +630,82 @@ async function renderRides(){
           </div>
           <div id="attendance-panel-${r.id}" style="display:none;margin-top:10px"></div>` : ''}
       </div>
+      <div id="edit-ride-form-${r.id}" style="display:none"></div>
     </div>`
-  }).join('')
+  }))
+  document.getElementById('ride-list').innerHTML = rideCards.join('')
+}
+
+function showEditRideForm(rideId){
+  const formEl = document.getElementById(`edit-ride-form-${rideId}`)
+  if(formEl.style.display !== 'none'){ formEl.style.display = 'none'; return }
+  const ride = null
+  db.from('rides').select('*').eq('id', rideId).single().then(({ data: r }) => {
+    if(!r) return
+    const opts = allWeatherLocations.map(l => `<option value="${l.id}" data-lat="${l.lat}" data-lng="${l.lng}" data-name="${l.name}" ${r.weather_location_name===l.name?'selected':''}>${l.name}</option>`).join('')
+    formEl.style.display = 'block'
+    formEl.innerHTML = `
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+        <div style="font-size:14px;font-weight:600;margin-bottom:12px">✏️ 編輯公告</div>
+        <div class="form-row"><label>活動標題</label><input type="text" id="edit-title-${rideId}" value="${r.title}"></div>
+        <div class="form-row"><label>日期</label><input type="date" id="edit-date-${rideId}" value="${r.date}"></div>
+        <div class="form-row"><label>第一集合點時間</label><input type="time" id="edit-time-${rideId}" value="${r.time||''}"></div>
+        <div class="form-row"><label>第二集合點時間</label><input type="time" id="edit-time2-${rideId}" value="${r.time2||''}"></div>
+        <div class="form-row"><label>Garmin Code</label><input type="text" id="edit-garmin-${rideId}" value="${r.garmin_code||''}"></div>
+        <div class="form-row"><label>Strava 路線</label><input type="text" id="edit-strava-${rideId}" value="${r.strava_url||''}"></div>
+        <div class="form-row"><label>Garmin 路線</label><input type="text" id="edit-garmin-url-${rideId}" value="${r.garmin_url||''}"></div>
+        <div class="form-row"><label>備註</label><input type="text" id="edit-note-${rideId}" value="${r.note||''}"></div>
+        <div class="form-row"><label>人數上限</label><input type="number" id="edit-max-${rideId}" value="${r.max_participants||''}"></div>
+        <div class="form-row"><label>🌤️ 天氣預報地點</label>
+          <select id="edit-weather-${rideId}">
+            <option value="">使用第一集合點天氣</option>
+            ${opts}
+            <option value="__custom__">＋ 自訂座標</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="save-btn" onclick="updateRide('${rideId}')">💾 儲存</button>
+          <button class="cancel-btn" onclick="document.getElementById('edit-ride-form-${rideId}').style.display='none'">取消</button>
+        </div>
+      </div>`
+  })
+}
+
+async function updateRide(rideId){
+  const weatherSel = document.getElementById(`edit-weather-${rideId}`)
+  let weatherLat = null, weatherLng = null, weatherName = ''
+  if(weatherSel.value && weatherSel.value !== '__custom__'){
+    const opt = weatherSel.options[weatherSel.selectedIndex]
+    weatherLat = parseFloat(opt.getAttribute('data-lat'))
+    weatherLng = parseFloat(opt.getAttribute('data-lng'))
+    weatherName = opt.getAttribute('data-name')
+  }
+  const payload = {
+    title: document.getElementById(`edit-title-${rideId}`).value.trim(),
+    date: document.getElementById(`edit-date-${rideId}`).value,
+    time: document.getElementById(`edit-time-${rideId}`).value,
+    time2: document.getElementById(`edit-time2-${rideId}`).value,
+    garmin_code: document.getElementById(`edit-garmin-${rideId}`).value.trim(),
+    strava_url: document.getElementById(`edit-strava-${rideId}`).value.trim(),
+    garmin_url: document.getElementById(`edit-garmin-url-${rideId}`).value.trim(),
+    note: document.getElementById(`edit-note-${rideId}`).value.trim(),
+    max_participants: parseInt(document.getElementById(`edit-max-${rideId}`).value) || null,
+    weather_lat: weatherLat,
+    weather_lng: weatherLng,
+    weather_location_name: weatherName
+  }
+  const { error } = await db.from('rides').update(payload).eq('id', rideId)
+  if(error){ showToast('儲存失敗'); console.error(error); return }
+  showToast('✅ 公告已更新！')
+  renderRides()
 }
 
 async function toggleRegistration(rideId, isRegistered){
   if(isRegistered){
-    await db.from('registrations')
-      .delete()
-      .eq('ride_id', rideId)
-      .eq('line_user_id', myProfile.line_user_id)
+    await db.from('registrations').delete().eq('ride_id', rideId).eq('line_user_id', myProfile.line_user_id)
     showToast('已取消報名')
   } else {
-    await db.from('registrations').insert({
-      ride_id: rideId,
-      line_user_id: myProfile.line_user_id,
-      name: myProfile.name,
-      avatar_url: myProfile.avatar_url
-    })
+    await db.from('registrations').insert({ ride_id: rideId, line_user_id: myProfile.line_user_id, name: myProfile.name, avatar_url: myProfile.avatar_url })
     showToast('✅ 報名成功！')
   }
   renderRides()
@@ -608,21 +713,12 @@ async function toggleRegistration(rideId, isRegistered){
 
 async function showAttendancePanel(rideId){
   const panel = document.getElementById(`attendance-panel-${rideId}`)
-  if(panel.style.display !== 'none'){
-    panel.style.display = 'none'
-    return
-  }
+  if(panel.style.display !== 'none'){ panel.style.display = 'none'; return }
   panel.style.display = 'block'
   panel.innerHTML = '<div style="font-size:13px;color:#999">載入中...</div>'
   const { data: regs } = await db.from('registrations').select('*').eq('ride_id', rideId)
   const { data: atts } = await db.from('attendances').select('*').eq('ride_id', rideId)
   const attIds = new Set((atts||[]).map(a => a.line_user_id))
-  const allMembers = [...(regs||[])]
-  allRiders.forEach(r => {
-    if(!allMembers.find(m => m.line_user_id === r.line_user_id)){
-      allMembers.push({ line_user_id: r.line_user_id, name: r.name, avatar_url: r.avatar_url })
-    }
-  })
   panel.innerHTML = `
     <div style="font-size:13px;font-weight:600;margin-bottom:8px">📋 出席審核</div>
     <div class="attend-list">
@@ -651,17 +747,17 @@ async function toggleAttendance(rideId, lineUserId, name, avatarUrl, btn){
   const isChecked = btn.classList.contains('checked')
   if(isChecked){
     await db.from('attendances').delete().eq('ride_id', rideId).eq('line_user_id', lineUserId)
-    await db.from('riders').update({ attendance_count: db.rpc('decrement', { x: 1 }) }).eq('line_user_id', lineUserId)
-    btn.classList.remove('checked')
-    btn.textContent = '○'
+    const { data: rider } = await db.from('riders').select('attendance_count').eq('line_user_id', lineUserId).single()
+    const newCount = Math.max(0, (rider?.attendance_count || 0) - 1)
+    await db.from('riders').update({ attendance_count: newCount }).eq('line_user_id', lineUserId)
+    btn.classList.remove('checked'); btn.textContent = '○'
     showToast('已取消出席')
   } else {
     await db.from('attendances').upsert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl })
     const { data: rider } = await db.from('riders').select('attendance_count').eq('line_user_id', lineUserId).single()
     const newCount = (rider?.attendance_count || 0) + 1
     await db.from('riders').update({ attendance_count: newCount }).eq('line_user_id', lineUserId)
-    btn.classList.add('checked')
-    btn.textContent = '✅'
+    btn.classList.add('checked'); btn.textContent = '✅'
     showToast('✅ 已確認出席')
   }
   await loadRiders()
@@ -676,8 +772,8 @@ async function addExtraAttendee(rideId){
   const avatarUrl = sel.options[sel.selectedIndex].getAttribute('data-avatar')
   await db.from('registrations').upsert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl })
   showToast(`✅ ${name} 已加入`)
-  showAttendancePanel(rideId)
-  showAttendancePanel(rideId)
+  await showAttendancePanel(rideId)
+  await showAttendancePanel(rideId)
 }
 
 function copyCode(code){
@@ -693,6 +789,18 @@ async function saveRide(){
   const time = document.getElementById('ride-time').value
   const location1 = getLocationValue('1')
   if(!title || !date || !time || !location1){ showToast('請填寫標題、日期、時間和第一集合點'); return }
+  const weatherSel = document.getElementById('ride-weather-location')
+  let weatherLat = null, weatherLng = null, weatherName = ''
+  if(weatherSel.value && weatherSel.value !== '__custom__'){
+    const opt = weatherSel.options[weatherSel.selectedIndex]
+    weatherLat = parseFloat(opt.getAttribute('data-lat'))
+    weatherLng = parseFloat(opt.getAttribute('data-lng'))
+    weatherName = opt.getAttribute('data-name')
+  } else if(weatherSel.value === '__custom__'){
+    weatherLat = parseFloat(document.getElementById('ride-weather-lat').value)
+    weatherLng = parseFloat(document.getElementById('ride-weather-lng').value)
+    weatherName = document.getElementById('ride-weather-name').value.trim()
+  }
   const deadlineVal = document.getElementById('ride-deadline').value
   const maxVal = document.getElementById('ride-max').value
   const { error } = await db.from('rides').insert({
@@ -705,7 +813,10 @@ async function saveRide(){
     garmin_url: document.getElementById('ride-garmin-url').value.trim(),
     note: document.getElementById('ride-note').value.trim(),
     deadline: deadlineVal ? new Date(deadlineVal).toISOString() : null,
-    max_participants: maxVal ? parseInt(maxVal) : null
+    max_participants: maxVal ? parseInt(maxVal) : null,
+    weather_lat: weatherLat,
+    weather_lng: weatherLng,
+    weather_location_name: weatherName
   })
   if(error){ showToast('發布失敗，請再試一次'); console.error(error); return }
   showToast('✅ 團騎公告發布成功！')
@@ -757,7 +868,7 @@ async function renderAdmin(){
         </div>
         <div class="admin-stats-row">
           <div class="admin-stat"><div class="val">${r.ftp||'—'}W</div><div class="lbl">FTP</div></div>
-          <div class="admin-stat"><div class="val">${timeAgo(r.updated_at)}</div><div class="lbl">上次更新資料</div></div>
+          <div class="admin-stat"><div class="val">${timeAgo(r.updated_at)}</div><div class="lbl">上次更新</div></div>
           <div class="admin-stat"><div class="val">${timeAgo(r.last_seen)}</div><div class="lbl">上次上線</div></div>
         </div>
         <div class="admin-stats-row">
@@ -885,9 +996,7 @@ function updatePreview(){
     badge.textContent = ct.label
     badge.className = 'cat-badge ' + ct.cls
     preview.style.display = 'flex'
-  } else {
-    preview.style.display = 'none'
-  }
+  } else { preview.style.display = 'none' }
 }
 
 async function saveProfile(){
