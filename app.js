@@ -502,11 +502,28 @@ function toggleGuideline(i){
 }
 
 async function renderRides(){
-  const { data } = await db.from('rides').select('*').order('date', { ascending: true })
+  const { data } = await db.from('rides').select('*').order('date', { ascending: false })
   const rides = data || []
   if(isAdmin) document.getElementById('add-ride-btn').style.display = 'block'
+  const activeRides = rides.filter(r => !r.is_finished)
+  const finishedRides = rides.filter(r => r.is_finished)
+  const { data: allAttsTotal } = await db.from('attendances').select('ride_id')
+  const totalRides = finishedRides.length
+  const totalAttendances = (allAttsTotal||[]).length
+  const myAttendances = allRiders.find(r => r.line_user_id === myProfile.line_user_id)?.attendance_count || 0
+
+  const statsHtml = `
+    <div class="ride-stats-card">
+      <div class="ride-stats-title">🚴 PACE 團騎統計</div>
+      <div class="ride-stats-grid">
+        <div class="ride-stat"><div class="val">${totalRides}</div><div class="lbl">總團騎次數</div></div>
+        <div class="ride-stat"><div class="val">${totalAttendances}</div><div class="lbl">總出席人次</div></div>
+        <div class="ride-stat"><div class="val">${myAttendances}</div><div class="lbl">我的出席</div></div>
+      </div>
+    </div>`
+
   if(rides.length === 0){
-    document.getElementById('ride-list').innerHTML = `<div class="empty-state">目前沒有團騎公告</div>`
+    document.getElementById('ride-list').innerHTML = statsHtml + `<div class="empty-state">目前沒有團騎公告</div>`
     return
   }
   const { data: myRegs } = await db.from('registrations').select('ride_id').eq('line_user_id', myProfile.line_user_id)
@@ -626,6 +643,10 @@ async function renderRides(){
         ${isAdmin ? `
           <div class="ride-admin-row">
             <button class="edit-btn" onclick="showAttendancePanel('${r.id}')">📋 出席審核</button>
+            ${r.is_finished
+              ? `<button class="edit-btn" onclick="toggleFinished('${r.id}', false)">🔄 重新開啟</button>`
+              : `<button class="edit-btn" onclick="toggleFinished('${r.id}', true)">✅ 標記結束</button>`
+            }
             <button class="delete-btn" onclick="deleteRide('${r.id}')">刪除</button>
           </div>
           <div id="attendance-panel-${r.id}" style="display:none;margin-top:10px"></div>` : ''}
@@ -633,7 +654,21 @@ async function renderRides(){
       <div id="edit-ride-form-${r.id}" style="display:none"></div>
     </div>`
   }))
-  document.getElementById('ride-list').innerHTML = rideCards.join('')
+  const activeCards = rideCards.filter((_, i) => !rides[i].is_finished)
+  const finishedCards = rideCards.filter((_, i) => rides[i].is_finished)
+
+  const finishedSection = finishedCards.length > 0 ? `
+    <div class="finished-section">
+      <div class="finished-header" onclick="toggleFinishedSection()">
+        <span>📁 已結束的團騎（${finishedCards.length}次）</span>
+        <span id="finished-arrow">▼</span>
+      </div>
+      <div id="finished-list" style="display:none">
+        ${finishedCards.join('')}
+      </div>
+    </div>` : ''
+
+  document.getElementById('ride-list').innerHTML = statsHtml + activeCards.join('') + finishedSection
 }
 
 function showEditRideForm(rideId){
@@ -828,6 +863,23 @@ async function deleteRide(id){
   await db.from('rides').delete().eq('id', id)
   showToast('已刪除')
   renderRides()
+}
+async function toggleFinished(rideId, finished){
+  await db.from('rides').update({ is_finished: finished }).eq('id', rideId)
+  showToast(finished ? '✅ 已標記為結束' : '🔄 已重新開啟')
+  renderRides()
+}
+
+function toggleFinishedSection(){
+  const list = document.getElementById('finished-list')
+  const arrow = document.getElementById('finished-arrow')
+  if(list.style.display === 'none'){
+    list.style.display = 'block'
+    arrow.textContent = '▲'
+  } else {
+    list.style.display = 'none'
+    arrow.textContent = '▼'
+  }
 }
 
 async function renderAdmin(){
