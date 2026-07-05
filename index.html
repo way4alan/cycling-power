@@ -151,9 +151,22 @@
           <label>Garmin Code（選填）</label>
           <input type="text" id="ride-garmin" placeholder="例如：AB1234">
         </div>
-        <div class="form-row">
+       <div class="form-row">
           <label>備註（選填）</label>
           <input type="text" id="ride-note" placeholder="例如：記得帶補給">
+        </div>
+        <div class="form-row">
+          <label>🌤️ 天氣預報地點（選填）</label>
+          <select id="ride-weather-location" onchange="handleWeatherLocationChange()">
+            <option value="">使用第一集合點天氣</option>
+          </select>
+          <div id="ride-weather-custom" style="display:none;margin-top:8px;display:none">
+            <input type="text" id="ride-weather-name" placeholder="地點名稱，例如：阿里山" style="margin-bottom:6px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <input type="number" id="ride-weather-lat" placeholder="緯度，例如：23.5136" step="0.0001">
+              <input type="number" id="ride-weather-lng" placeholder="經度，例如：120.8034" step="0.0001">
+            </div>
+          </div>
         </div>
         <div style="display:flex;gap:8px">
           <button class="save-btn" onclick="saveRide()">發布公告</button>
