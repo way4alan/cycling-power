@@ -492,6 +492,7 @@ async function renderPace(){
       </div>
       <div class="guideline-body" id="guideline-body-${i}">${g.content}</div>
     </div>`).join('')
+  updateNutrition()
 }
 const RIDE_INTENSITY_MAP = {
   1.0: 92, 1.5: 86, 2.0: 81, 2.5: 78,
