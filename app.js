@@ -493,7 +493,121 @@ async function renderPace(){
       <div class="guideline-body" id="guideline-body-${i}">${g.content}</div>
     </div>`).join('')
 }
+const RIDE_INTENSITY_MAP = {
+  1.0: 92, 1.5: 86, 2.0: 81, 2.5: 78,
+  3.0: 75, 3.5: 72, 4.0: 69, 5.0: 66, 6.0: 63
+}
 
+function getSuggestedIntensity(hours){
+  const keys = Object.keys(RIDE_INTENSITY_MAP).map(Number).sort((a,b)=>a-b)
+  let closest = keys[0]
+  let minDiff = Math.abs(hours - keys[0])
+  for(const k of keys){
+    const diff = Math.abs(hours - k)
+    if(diff < minDiff){ minDiff = diff; closest = k }
+  }
+  return RIDE_INTENSITY_MAP[closest]
+}
+
+function updateNutrition(){
+  const me = allRiders.find(r => r.line_user_id === myProfile?.line_user_id) || myData
+  const weight = me?.weight
+  const ftp = me?.ftp
+  if(!weight || !ftp){
+    document.getElementById('nutrition-result').innerHTML = `<div class="tire-setup-hint">請至「我的資料」填寫 FTP 和體重</div>`
+    return
+  }
+
+  const hoursEl = document.getElementById('ride-hours')
+  const intensityEl = document.getElementById('ride-intensity')
+  const hours = parseFloat(hoursEl.value)
+  const intensity = parseInt(intensityEl.value)
+
+  document.getElementById('ride-hours-display').textContent = hours + 'hr'
+  document.getElementById('ride-intensity-display').textContent = intensity + '%'
+
+  const suggested = getSuggestedIntensity(hours)
+  const suggEl = document.getElementById('ftp-suggestion')
+  if(Math.abs(intensity - suggested) <= 2){
+    suggEl.textContent = '✅ 建議配速'
+  } else if(intensity > suggested){
+    suggEl.textContent = '⚠️ 高於建議，注意後段掉速'
+  } else {
+    suggEl.textContent = '💡 保守配速，適合新手'
+  }
+
+  const power = Math.round(ftp * intensity / 100)
+  const totalKJ = Math.round(power * hours * 3600 / 1000)
+  const totalKcal = totalKJ
+  const carbPerHour = weight >= 70 ? 65 : 60
+  const totalCarbKcal = Math.round(carbPerHour * 4 * hours)
+  const post30Carb = Math.round(weight * 0.8)
+  const post30Protein = Math.round(weight * 0.3)
+  const post30Kcal = Math.round(post30Carb * 4 + post30Protein * 4)
+  const remainingKcal = Math.max(0, totalKcal - totalCarbKcal - post30Kcal)
+  const preCarb = Math.round(weight * 1)
+
+  document.getElementById('nutrition-result').innerHTML = `
+    <div class="nutrition-card">
+      <div class="nutrition-row header-row">
+        <span>功率</span>
+        <span>${power}W（FTP ${intensity}%）</span>
+      </div>
+      <div class="nutrition-row header-row">
+        <span>預估總消耗</span>
+        <span>${totalKcal.toLocaleString()} kcal</span>
+      </div>
+    </div>
+
+    <div class="nutrition-section">
+      <div class="nutrition-section-title">📊 出發前</div>
+      <div class="nutrition-row">
+        <span>出發前 3-4 小時</span>
+        <span>正常含碳水正餐</span>
+      </div>
+      <div class="nutrition-row">
+        <span>出發前 1 小時</span>
+        <span><strong>${preCarb}g</strong> 簡單碳水</span>
+      </div>
+    </div>
+
+    <div class="nutrition-section">
+      <div class="nutrition-section-title">🚴 騎乘中（每小時）</div>
+      <div class="nutrition-row">
+        <span>消耗</span>
+        <span>${Math.round(totalKcal / hours)} kcal</span>
+      </div>
+      <div class="nutrition-row highlight">
+        <span>建議補充碳水</span>
+        <span><strong>${carbPerHour}g</strong>（少量多次）</span>
+      </div>
+      <div class="nutrition-row">
+        <span>補水</span>
+        <span>500-750 ml</span>
+      </div>
+      <div class="nutrition-row">
+        <span>鈉</span>
+        <span>400-600 mg</span>
+      </div>
+    </div>
+
+    <div class="nutrition-section">
+      <div class="nutrition-section-title">📉 騎乘後</div>
+      <div class="nutrition-row">
+        <span>騎乘中補回</span>
+        <span>${totalCarbKcal} kcal</span>
+      </div>
+      <div class="nutrition-row highlight">
+        <span>結束後 30 分鐘內</span>
+        <span>碳水 <strong>${post30Carb}g</strong> + 蛋白質 <strong>${post30Protein}g</strong></span>
+      </div>
+      <div class="nutrition-row danger">
+        <span>剩餘能量缺口</span>
+        <span><strong>${remainingKcal.toLocaleString()} kcal</strong></span>
+      </div>
+      <div style="font-size:12px;color:#666;margin-top:6px;text-align:center">🍚 好好吃一頓正餐把缺口補回來！</div>
+    </div>`
+}
 function toggleGuideline(i){
   const body = document.getElementById(`guideline-body-${i}`)
   const arrow = document.getElementById(`arrow-${i}`)
