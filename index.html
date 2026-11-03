@@ -2,296 +2,305 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PACE戰力分析</title>
-<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#080B12">
+<title>PACE 沛速車隊</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow+Condensed:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="icon" href="assets/waves.svg">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-tab="leaderboard">
 <div id="loading" class="loading-screen">
-  <div class="loading-icon">🚴</div>
-  <div class="loading-text">載入中...</div>
+  <div class="loading-brand">
+    <div class="logo-mark" aria-label="PACE">PACE</div>
+    <div class="loading-zh">沛速車隊</div>
+    <div class="loading-en">FIND YOUR RHYTHM. KEEP THE LEAD.</div>
+    <div class="loading-text">載入中...</div>
+  </div>
 </div>
 
-<div id="pending-screen" style="display:none">
-  <div class="pending-wrap"></div>
-</div>
+<div id="pending-screen" class="pending-screen" hidden></div>
 
-<div id="app" style="display:none">
-  <nav class="bottom-nav">
-    <button class="nav-btn active" onclick="switchTab('leaderboard')">
-      <span class="nav-icon">🏆</span>
-      <span class="nav-label">排行榜</span>
+<div id="app" hidden>
+  <aside class="side-nav" aria-label="主選單">
+    <div class="side-logo logo-mark" aria-hidden="true">PACE</div>
+    <button class="nav-btn active" type="button" data-nav="leaderboard" data-act="tab" data-tab="leaderboard">
+      <span data-icon="trophy" data-size="22"></span><span class="nav-label">排行榜</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('match')">
-      <span class="nav-icon">⚡</span>
-      <span class="nav-label">配對</span>
+    <button class="nav-btn" type="button" data-nav="match" data-act="tab" data-tab="match">
+      <span data-icon="swords" data-size="22"></span><span class="nav-label">配對</span>
     </button>
-    <button class="nav-btn pace-nav" onclick="switchTab('pace')">
-      <span class="nav-icon">🚴</span>
-      <span class="nav-label">PACE</span>
+    <button class="nav-btn" type="button" data-nav="pace" data-act="tab" data-tab="pace">
+      <span data-icon="bike" data-size="22"></span><span class="nav-label">PACE</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('ride')">
-      <span class="nav-icon">📍</span>
-      <span class="nav-label">團騎</span>
+    <button class="nav-btn" type="button" data-nav="ride" data-act="tab" data-tab="ride">
+      <span data-icon="map-pin" data-size="22"></span><span class="nav-label">團騎</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('profile')">
-      <span class="nav-icon">👤</span>
-      <span class="nav-label">我的資料</span>
+    <button class="nav-btn" type="button" data-nav="profile" data-act="tab" data-tab="profile">
+      <span data-icon="user" data-size="22"></span><span class="nav-label">我的</span>
     </button>
-    <button class="nav-btn" id="admin-nav-btn" onclick="switchTab('admin')" style="display:none">
-      <span class="nav-icon">🛡️</span>
-      <span class="nav-label">管理</span>
+  </aside>
+
+  <div class="shell">
+    <div class="shell-inner">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo-mark" aria-label="PACE">PACE</div>
+          <div class="brand-text">
+            <h1 id="page-title">戰力排行榜</h1>
+            <p id="page-sub">沛速車隊 · W/KG RANKING</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn ghost" id="tone-btn" type="button" data-act="tone" aria-label="調整背景亮度"><span data-icon="sun" data-size="18"></span></button>
+          <button class="icon-btn ghost" id="bell-btn" type="button" data-act="bell" aria-label="通知"><span data-icon="bell" data-size="18"></span><span id="bell-count" class="dot-count" hidden></span></button>
+          <button class="icon-btn ghost" id="share-btn" type="button" data-act="share" aria-label="分享戰力" hidden><span data-icon="share-2" data-size="18"></span></button>
+          <button class="icon-btn pink" id="add-ride-btn" type="button" data-act="show-ride-form" aria-label="新增團騎" hidden><span data-icon="plus" data-size="20"></span></button>
+        </div>
+      </header>
+
+      <main class="content" id="content">
+        <div id="tab-leaderboard" class="tab-panel active">
+          <div class="lb-grid">
+            <div class="lb-primary">
+              <div class="cat-filters" id="cat-filters">
+                <button class="cat-btn active" type="button" data-act="filter" data-cat="all">全部</button>
+                <button class="cat-btn" type="button" data-act="filter" data-cat="A">A貓</button>
+                <button class="cat-btn" type="button" data-act="filter" data-cat="B">B貓</button>
+                <button class="cat-btn" type="button" data-act="filter" data-cat="C">C貓</button>
+                <button class="cat-btn" type="button" data-act="filter" data-cat="D">D貓</button>
+              </div>
+              <div class="metric-row">
+                <div class="metric-card">
+                  <div class="metric-lbl">平均 FTP</div>
+                  <div class="metric-val"><span id="avg-ftp">—</span><span class="unit">W</span></div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-lbl">平均 W/KG</div>
+                  <div class="metric-val"><span id="avg-wkg">—</span></div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-lbl">成員數</div>
+                  <div class="metric-val"><span id="member-count">—</span><span class="unit">人</span></div>
+                </div>
+              </div>
+              <div id="podium" class="podium"></div>
+              <div id="me-dock" class="me-dock" hidden></div>
+            </div>
+            <div class="lb-secondary">
+              <div class="wave-rule" aria-hidden="true"></div>
+              <div class="section-head">
+                <h2>完整排名</h2>
+                <div class="cat-legend">
+                  <span><i class="dot a"></i>A ≥ 4.0</span>
+                  <span><i class="dot b"></i>B ≥ 3.2</span>
+                  <span><i class="dot c"></i>C ≥ 2.5</span>
+                  <span><i class="dot d"></i>D</span>
+                </div>
+              </div>
+              <div id="rider-list" class="rider-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-match" class="tab-panel">
+          <div class="match-me-card" id="match-me-card"></div>
+          <h2 class="section-title">最接近你的對手</h2>
+          <div id="match-list"></div>
+        </div>
+
+        <div id="tab-pace" class="tab-panel">
+          <section class="card pace-section">
+            <h2 class="pace-section-title"><span data-icon="gauge" data-size="18"></span>胎壓建議</h2>
+            <div id="tire-pressure-display">
+              <div class="tire-setup-hint">請至「我的資料」填寫體重和胎寬</div>
+            </div>
+          </section>
+          <section class="card pace-section">
+            <h2 class="pace-section-title"><span data-icon="utensils" data-size="18"></span>補給策略計算機</h2>
+            <div class="form-row">
+              <label for="ride-hours">騎乘時間</label>
+              <div class="slider-row">
+                <input type="range" id="ride-hours" min="1" max="6" step="0.5" value="3.5" oninput="updateNutrition()">
+                <span id="ride-hours-display" class="slider-val">3.5hr</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="ride-intensity">強度（FTP%）<span id="ftp-suggestion" class="hint"></span></label>
+              <div class="slider-row">
+                <input type="range" id="ride-intensity" min="60" max="100" step="1" value="72" oninput="updateNutrition()">
+                <span id="ride-intensity-display" class="slider-val">72%</span>
+              </div>
+            </div>
+            <div id="nutrition-result"></div>
+          </section>
+          <section class="card pace-section">
+            <h2 class="pace-section-title"><span data-icon="flag" data-size="18"></span>團規與技巧</h2>
+            <div id="guidelines-list"></div>
+          </section>
+        </div>
+
+        <div id="tab-ride" class="tab-panel">
+          <div id="ptr" class="ptr" hidden>放開即可更新</div>
+          <div id="ride-form" class="card form-card" hidden>
+            <h2 class="pace-section-title">新增團騎公告</h2>
+            <div class="form-row"><label for="ride-title">活動標題</label><input type="text" id="ride-title" placeholder="例如：週日晨騎"></div>
+            <div class="form-row"><label for="ride-date">日期</label><input type="date" id="ride-date"></div>
+            <div class="form-row">
+              <label for="ride-location1">第一集合點</label>
+              <select id="ride-location1" onchange="handleLocationChange('1')"><option value="">載入中...</option></select>
+              <input type="text" id="ride-location1-custom" placeholder="輸入地址" hidden>
+            </div>
+            <div class="form-row"><label for="ride-time">第一集合點時間</label><input type="time" id="ride-time"></div>
+            <div class="form-row">
+              <label for="ride-location2">第二集合點（選填）</label>
+              <select id="ride-location2" onchange="handleLocationChange('2')"><option value="">不設第二集合點</option></select>
+              <input type="text" id="ride-location2-custom" placeholder="輸入地址" hidden>
+            </div>
+            <div class="form-row"><label for="ride-time2">第二集合點時間（選填）</label><input type="time" id="ride-time2"></div>
+            <div class="form-row"><label for="ride-deadline">截止報名時間（選填）</label><input type="datetime-local" id="ride-deadline"></div>
+            <div class="form-row"><label for="ride-max">人數上限（選填）</label><input type="number" id="ride-max" placeholder="例如：20"></div>
+            <div class="form-row"><label for="ride-strava">Strava 路線連結（選填）</label><input type="text" id="ride-strava" placeholder="https://www.strava.com/routes/..."></div>
+            <div class="form-row"><label for="ride-garmin-url">Garmin 路線連結（選填）</label><input type="text" id="ride-garmin-url" placeholder="https://connect.garmin.com/..."></div>
+            <div class="form-row"><label for="ride-garmin">Garmin Code（選填）</label><input type="text" id="ride-garmin" placeholder="例如：AB1234"></div>
+            <div class="form-row"><label for="ride-note">備註（選填）</label><input type="text" id="ride-note" placeholder="例如：記得帶補給"></div>
+            <div class="form-row">
+              <label for="ride-weather-location">天氣預報地點（選填）</label>
+              <select id="ride-weather-location" onchange="handleWeatherLocationChange()"><option value="">使用第一集合點天氣</option></select>
+              <div id="ride-weather-custom" hidden>
+                <input type="text" id="ride-weather-name" placeholder="地點名稱，例如：阿里山">
+                <div class="form-grid">
+                  <input type="number" id="ride-weather-lat" placeholder="緯度，例如：23.5136" step="0.0001">
+                  <input type="number" id="ride-weather-lng" placeholder="經度，例如：120.8034" step="0.0001">
+                </div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button class="save-btn" type="button" onclick="saveRide()">發布公告</button>
+              <button class="cancel-btn" type="button" onclick="hideRideForm()">取消</button>
+            </div>
+          </div>
+          <div id="ride-list"></div>
+        </div>
+
+        <div id="tab-profile" class="tab-panel">
+          <div id="profile-hero"></div>
+          <div id="profile-stats"></div>
+          <div class="profile-split">
+            <div id="attendance-progress"></div>
+            <div id="zone-visual"></div>
+          </div>
+          <div id="badge-wall"></div>
+          <div id="admin-entry"></div>
+          <div class="card form-card" id="profile-form">
+            <h2 class="pace-section-title">編輯資料</h2>
+            <div class="form-row"><label for="inp-ftp">FTP（瓦特）</label><input type="number" id="inp-ftp" placeholder="例如 280" oninput="updatePreview(); paintZones()"></div>
+            <div class="form-row"><label for="inp-weight">體重（kg）</label><input type="number" id="inp-weight" placeholder="例如 70" oninput="updatePreview()"></div>
+            <div class="wkg-preview" id="wkg-preview" hidden>
+              <span id="preview-val" class="num">—</span> W/kg
+              <span class="cat-badge" id="preview-cat"></span>
+            </div>
+            <div class="form-row">
+              <label for="inp-tire">胎寬</label>
+              <select id="inp-tire">
+                <option value="">請選擇胎寬</option>
+                <option value="25">25c</option>
+                <option value="26">26c</option>
+                <option value="28">28c</option>
+                <option value="29">29c</option>
+                <option value="30">30c</option>
+                <option value="32">32c</option>
+              </select>
+            </div>
+            <div class="form-row"><label for="inp-mood">心情小語（顯示在排行榜）</label><input type="text" id="inp-mood" placeholder="例如：今天腿很酸" maxlength="30"></div>
+            <div id="color-picker-section" hidden>
+              <div class="form-row">
+                <label for="inp-name-color">ID 文字顏色（出席 10 次解鎖）</label>
+                <div class="color-picker-row">
+                  <input type="color" id="inp-name-color" value="#ffffff" oninput="updateColorPreview()">
+                  <span id="color-preview-text">預覽文字</span>
+                </div>
+              </div>
+            </div>
+            <div class="zone-section">
+              <div class="zone-title">訓練區間功率（選填，填上限瓦數）</div>
+              <div class="zone-grid">
+                <div class="zone-cell z1"><div class="zone-label">Z1 恢復</div><input type="number" id="z1" placeholder="W" oninput="paintZones()"></div>
+                <div class="zone-cell z2"><div class="zone-label">Z2 耐力</div><input type="number" id="z2" placeholder="W" oninput="paintZones()"></div>
+                <div class="zone-cell z3"><div class="zone-label">Z3 節奏</div><input type="number" id="z3" placeholder="W" oninput="paintZones()"></div>
+                <div class="zone-cell z4"><div class="zone-label">Z4 閾值</div><input type="number" id="z4" placeholder="W" oninput="paintZones()"></div>
+                <div class="zone-cell z5"><div class="zone-label">Z5 VO2</div><input type="number" id="z5" placeholder="W" oninput="paintZones()"></div>
+              </div>
+            </div>
+            <button class="save-btn" type="button" onclick="saveProfile()"><span data-icon="check" data-size="18"></span>儲存更新</button>
+          </div>
+        </div>
+
+        <div id="tab-admin" class="tab-panel">
+          <button class="text-back" type="button" data-act="tab" data-tab="profile"><span data-icon="chevron-left" data-size="16"></span>返回我的資料</button>
+          <div class="admin-tabs">
+            <button class="admin-tab active" type="button" data-act="admin-tab" data-tab="pending">待審核 <span id="pending-count" class="count-badge" hidden></span></button>
+            <button class="admin-tab" type="button" data-act="admin-tab" data-tab="active">已核准</button>
+            <button class="admin-tab" type="button" data-act="admin-tab" data-tab="locations">集合地點</button>
+            <button class="admin-tab" type="button" data-act="admin-tab" data-tab="guidelines">團規管理</button>
+          </div>
+          <div id="admin-pending" class="admin-panel active"></div>
+          <div id="admin-active" class="admin-panel"></div>
+          <div id="admin-locations" class="admin-panel">
+            <div class="card form-card">
+              <div class="form-row"><label for="loc-name">地點名稱</label><input type="text" id="loc-name" placeholder="例如：愛河之心"></div>
+              <div class="form-row"><label for="loc-address">地址</label><input type="text" id="loc-address" placeholder="例如：高雄市苓雅區四維三路2號"></div>
+              <button class="save-btn" type="button" onclick="saveLocation()">新增地點</button>
+            </div>
+            <div id="location-list"></div>
+          </div>
+          <div id="admin-guidelines" class="admin-panel">
+            <div class="card form-card">
+              <div class="form-row"><label for="gl-category">分類名稱</label><input type="text" id="gl-category" placeholder="例如：爬坡技巧"></div>
+              <div class="form-row"><label for="gl-content">內容</label><textarea id="gl-content" placeholder="輸入內容..." rows="5"></textarea></div>
+              <button class="save-btn" id="gl-save" type="button" onclick="saveGuideline()">新增分類</button>
+            </div>
+            <div id="guideline-admin-list"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <nav class="bottom-nav" aria-label="主選單">
+    <button class="nav-btn active" type="button" data-nav="leaderboard" data-act="tab" data-tab="leaderboard">
+      <span data-icon="trophy" data-size="20"></span><span class="nav-label">排行榜</span>
+    </button>
+    <button class="nav-btn" type="button" data-nav="match" data-act="tab" data-tab="match">
+      <span data-icon="swords" data-size="20"></span><span class="nav-label">配對</span>
+    </button>
+    <button class="nav-btn pace-nav" type="button" data-nav="pace" data-act="tab" data-tab="pace">
+      <span class="nav-ico" data-icon="bike" data-size="26"></span><span class="nav-label">PACE</span>
+    </button>
+    <button class="nav-btn" type="button" data-nav="ride" data-act="tab" data-tab="ride">
+      <span data-icon="map-pin" data-size="20"></span><span class="nav-label">團騎</span>
+    </button>
+    <button class="nav-btn" type="button" data-nav="profile" data-act="tab" data-tab="profile">
+      <span data-icon="user" data-size="20"></span><span class="nav-label">我的</span>
     </button>
   </nav>
+</div>
 
-  <div class="content">
-    <div id="tab-leaderboard" class="tab-panel active">
-      <div class="page-header">
-        <h1>PACE戰力排行榜</h1>
-        <div class="cat-filters">
-          <button class="cat-btn active" onclick="filterCat('all',this)">全部</button>
-          <button class="cat-btn" onclick="filterCat('A',this)">A貓</button>
-          <button class="cat-btn" onclick="filterCat('B',this)">B貓</button>
-          <button class="cat-btn" onclick="filterCat('C',this)">C貓</button>
-        </div>
-      </div>
-      <div class="metric-row">
-        <div class="metric-card">
-          <div class="metric-val" id="avg-ftp">—</div>
-          <div class="metric-lbl">平均 FTP</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-val" id="avg-wkg">—</div>
-          <div class="metric-lbl">平均 W/kg</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-val" id="member-count">—</div>
-          <div class="metric-lbl">成員數</div>
-        </div>
-      </div>
-      <div id="rider-list" class="rider-list"></div>
-    </div>
-
-    <div id="tab-match" class="tab-panel">
-      <div class="page-header"><h1>配對對手</h1></div>
-      <div class="match-me-card" id="match-me-card"></div>
-      <h2 class="section-title">最接近你的對手</h2>
-      <div id="match-list"></div>
-    </div>
-
-    <div id="tab-pace" class="tab-panel">
-      <div class="page-header"><h1>PACE</h1></div>
-      <div class="pace-section">
-        <div class="pace-section-title">🔧 胎壓建議</div>
-        <div id="tire-pressure-display">
-          <div class="tire-setup-hint">請至「我的資料」填寫體重和胎寬</div>
-        </div>
-      </div>
-            <div class="pace-section">
-        <div class="pace-section-title">🍌 補給策略計算機</div>
-        <div class="form-row">
-          <label>騎乘時間</label>
-          <div style="display:flex;align-items:center;gap:10px">
-            <input type="range" id="ride-hours" min="1" max="6" step="0.5" value="3.5" oninput="updateNutrition()" style="flex:1">
-            <span id="ride-hours-display" style="font-size:15px;font-weight:500;min-width:40px">3.5hr</span>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>強度（FTP%）<span id="ftp-suggestion" style="font-size:11px;color:#534AB7;margin-left:6px"></span></label>
-          <div style="display:flex;align-items:center;gap:10px">
-            <input type="range" id="ride-intensity" min="60" max="100" step="1" value="72" oninput="updateNutrition()" style="flex:1">
-            <span id="ride-intensity-display" style="font-size:15px;font-weight:500;min-width:44px">72%</span>
-          </div>
-        </div>
-        <div id="nutrition-result" style="margin-top:4px"></div>
-      </div>
-      <div class="pace-section">
-        <div class="pace-section-title">📋 團規與技巧</div>
-        <div id="guidelines-list"></div>
-      </div>
-    </div>
-
-    <div id="tab-ride" class="tab-panel">
-      <div class="page-header">
-        <h1>團騎公告</h1>
-        <button class="icon-btn" id="add-ride-btn" style="display:none" onclick="showRideForm()">＋ 新增</button>
-      </div>
-      <div id="ride-form" style="display:none" class="form-card">
-        <div class="form-row">
-          <label>活動標題</label>
-          <input type="text" id="ride-title" placeholder="例如：週日晨騎">
-        </div>
-     <div class="form-row">
-          <label>日期</label>
-          <input type="date" id="ride-date">
-        </div>
-        <div class="form-row">
-          <label>第一集合點</label>
-          <select id="ride-location1" onchange="handleLocationChange('1')">
-            <option value="">載入中...</option>
-          </select>
-          <input type="text" id="ride-location1-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
-        </div>
-        <div class="form-row">
-          <label>第一集合點時間</label>
-          <input type="time" id="ride-time">
-        </div>
-        <div class="form-row">
-          <label>第二集合點（選填）</label>
-          <select id="ride-location2" onchange="handleLocationChange('2')">
-            <option value="">不設第二集合點</option>
-          </select>
-          <input type="text" id="ride-location2-custom" placeholder="輸入地址" style="display:none;margin-top:8px">
-        </div>
-        <div class="form-row">
-          <label>第二集合點時間（選填）</label>
-          <input type="time" id="ride-time2">
-        </div>
-        <div class="form-row">
-          <label>截止報名時間（選填）</label>
-          <input type="datetime-local" id="ride-deadline">
-        </div>
-        <div class="form-row">
-          <label>人數上限（選填）</label>
-          <input type="number" id="ride-max" placeholder="例如：20">
-        </div>
-        <div class="form-row">
-          <label>Strava 路線連結（選填）</label>
-          <input type="text" id="ride-strava" placeholder="https://www.strava.com/routes/...">
-        </div>
-        <div class="form-row">
-          <label>Garmin 路線連結（選填）</label>
-          <input type="text" id="ride-garmin-url" placeholder="https://connect.garmin.com/...">
-        </div>
-        <div class="form-row">
-          <label>Garmin Code（選填）</label>
-          <input type="text" id="ride-garmin" placeholder="例如：AB1234">
-        </div>
-       <div class="form-row">
-          <label>備註（選填）</label>
-          <input type="text" id="ride-note" placeholder="例如：記得帶補給">
-        </div>
-        <div class="form-row">
-          <label>🌤️ 天氣預報地點（選填）</label>
-          <select id="ride-weather-location" onchange="handleWeatherLocationChange()">
-            <option value="">使用第一集合點天氣</option>
-          </select>
-          <div id="ride-weather-custom" style="display:none;margin-top:8px;display:none">
-            <input type="text" id="ride-weather-name" placeholder="地點名稱，例如：阿里山" style="margin-bottom:6px">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <input type="number" id="ride-weather-lat" placeholder="緯度，例如：23.5136" step="0.0001">
-              <input type="number" id="ride-weather-lng" placeholder="經度，例如：120.8034" step="0.0001">
-            </div>
-          </div>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="save-btn" onclick="saveRide()">發布公告</button>
-          <button class="cancel-btn" onclick="hideRideForm()">取消</button>
-        </div>
-      </div>
-      <div id="ride-list"></div>
-    </div>
-
-    <div id="tab-profile" class="tab-panel">
-      <div class="page-header"><h1>我的資料</h1></div>
-      <div class="profile-avatar-row" id="profile-avatar-row"></div>
-      <div id="attendance-progress"></div>
-      <div class="form-card">
-        <div class="form-row">
-          <label>FTP（瓦特）</label>
-          <input type="number" id="inp-ftp" placeholder="例如 280" oninput="updatePreview()">
-        </div>
-        <div class="form-row">
-          <label>體重（kg）</label>
-          <input type="number" id="inp-weight" placeholder="例如 70" oninput="updatePreview()">
-        </div>
-        <div class="wkg-preview" id="wkg-preview" style="display:none">
-          <span id="preview-val">—</span> W/kg
-          <span class="cat-badge" id="preview-cat"></span>
-        </div>
-        <div class="form-row">
-          <label>胎寬</label>
-          <select id="inp-tire">
-            <option value="">請選擇胎寬</option>
-            <option value="25">25c</option>
-            <option value="26">26c</option>
-            <option value="28">28c</option>
-            <option value="29">29c</option>
-            <option value="30">30c</option>
-            <option value="32">32c</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>心情小語（顯示在排行榜）</label>
-          <input type="text" id="inp-mood" placeholder="例如：今天腿很酸 😅" maxlength="30">
-        </div>
-        <div id="color-picker-section" style="display:none">
-          <div class="form-row">
-            <label>🎨 ID 文字顏色（出席10次解鎖）</label>
-            <div class="color-picker-row">
-              <input type="color" id="inp-name-color" value="#ffffff">
-              <span id="color-preview-text" style="font-size:16px;font-weight:600;margin-left:12px">預覽文字</span>
-            </div>
-          </div>
-        </div>
-        <div class="zone-section">
-          <div class="zone-title">訓練區間功率（選填）</div>
-          <div class="zone-grid">
-            <div class="zone-cell z1"><div class="zone-label">Z1 恢復</div><input type="number" id="z1" placeholder="W"></div>
-            <div class="zone-cell z2"><div class="zone-label">Z2 耐力</div><input type="number" id="z2" placeholder="W"></div>
-            <div class="zone-cell z3"><div class="zone-label">Z3 節奏</div><input type="number" id="z3" placeholder="W"></div>
-            <div class="zone-cell z4"><div class="zone-label">Z4 閾值</div><input type="number" id="z4" placeholder="W"></div>
-            <div class="zone-cell z5"><div class="zone-label">Z5 VO2</div><input type="number" id="z5" placeholder="W"></div>
-          </div>
-        </div>
-        <button class="save-btn" onclick="saveProfile()">💾 儲存更新</button>
-      </div>
-    </div>
-
-    <div id="tab-admin" class="tab-panel">
-      <div class="page-header"><h1>成員管理</h1></div>
-      <div class="admin-tabs">
-        <button class="admin-tab active" onclick="switchAdminTab('pending')">待審核 <span id="pending-count" class="count-badge"></span></button>
-        <button class="admin-tab" onclick="switchAdminTab('active')">已核准</button>
-        <button class="admin-tab" onclick="switchAdminTab('locations')">集合地點</button>
-        <button class="admin-tab" onclick="switchAdminTab('guidelines')">團規管理</button>
-      </div>
-      <div id="admin-pending" class="admin-panel active"></div>
-      <div id="admin-active" class="admin-panel"></div>
-      <div id="admin-locations" class="admin-panel">
-        <div class="form-card" style="margin-bottom:12px">
-          <div class="form-row">
-            <label>地點名稱</label>
-            <input type="text" id="loc-name" placeholder="例如：愛河之心">
-          </div>
-          <div class="form-row">
-            <label>地址</label>
-            <input type="text" id="loc-address" placeholder="例如：高雄市苓雅區四維三路2號">
-          </div>
-          <button class="save-btn" onclick="saveLocation()">新增地點</button>
-        </div>
-        <div id="location-list"></div>
-      </div>
-      <div id="admin-guidelines" class="admin-panel">
-        <div class="form-card" style="margin-bottom:12px">
-          <div class="form-row">
-            <label>分類名稱</label>
-            <input type="text" id="gl-category" placeholder="例如：🏔️ 爬坡技巧">
-          </div>
-          <div class="form-row">
-            <label>內容</label>
-            <textarea id="gl-content" placeholder="輸入內容..." rows="5" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;font-size:14px;background:#fafafa;resize:vertical"></textarea>
-          </div>
-          <button class="save-btn" onclick="saveGuideline()">新增分類</button>
-        </div>
-        <div id="guideline-admin-list"></div>
-      </div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="confirm" class="confirm" hidden>
+  <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h3 id="confirm-title"></h3>
+    <p id="confirm-body"></p>
+    <div class="confirm-actions">
+      <button class="cancel-btn" id="confirm-cancel" type="button">取消</button>
+      <button class="save-btn" id="confirm-ok" type="button">確定</button>
     </div>
   </div>
 </div>
-<div class="toast" id="toast"></div>
+<canvas id="confetti"></canvas>
+<script src="icons.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
