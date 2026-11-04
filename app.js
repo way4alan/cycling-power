@@ -54,6 +54,10 @@ let ridesReady = false
 let savingProfile = false
 let gesture = null
 let confettiFrame = 0
+let lineSession = null
+let lineSessionPromise = null
+let lineRefreshTimer = 0
+let myRegByRide = new Map()
 const countState = new Map()
 const memCache = new Map()
 
@@ -70,6 +74,9 @@ const RIDE_INTENSITY_MAP = {
   3.0: 75, 3.5: 72, 4.0: 69, 5.0: 66, 6.0: 63
 }
 
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -316,7 +323,7 @@ function askConfirm(opts) {
   })
 }
 function celebrate() {
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const reduce = prefersReducedMotion()
   try { if (navigator.vibrate) navigator.vibrate([18, 24, 18]) } catch (e) { /* unsupported */ }
   if (reduce) return
   const canvas = document.getElementById('confetti')
@@ -366,7 +373,7 @@ function tweenNumber(el, to, digits) {
   const from = countState.has(key) ? countState.get(key) : 0
   countState.set(key, target)
   const paint = (v) => { el.textContent = digits ? Number(v).toFixed(digits) : String(Math.round(v)) }
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const reduce = prefersReducedMotion()
   if (reduce || Math.abs(target - from) < 0.001) { paint(target); return }
   const t0 = performance.now()
   const step = (now) => {
@@ -425,9 +432,79 @@ function updateBell(n) {
   b.hidden = !(isAdmin && n > 0)
   b.textContent = String(n || '')
 }
+function isSameRider(a, b) {
+  if (!a || !b) return false
+  if (a.id && b.id && a.id === b.id) return true
+  return !!(a.line_user_id && b.line_user_id && a.line_user_id === b.line_user_id)
+}
+function isMe(r) {
+  if (!r || !myProfile) return false
+  if (myData && isSameRider(r, myData)) return true
+  return !!(r.line_user_id && r.line_user_id === myProfile.line_user_id)
+}
 function currentRider() {
   if (!myProfile) return myData
-  return allRiders.find(r => r.line_user_id === myProfile.line_user_id) || myData
+  return allRiders.find(r => isMe(r)) || myData
+}
+function readFrom(table) {
+  if (DEMO) return db.from(table)
+  if (table === 'riders') return db.from('riders_directory')
+  if (table === 'registrations') return db.from('registrations_directory')
+  if (table === 'attendances') return db.from('attendances_directory')
+  return db.from(table)
+}
+function riderForAttendance(att) {
+  return allRiders.find(rr =>
+    (att.rider_id && rr.id === att.rider_id) ||
+    (att.line_user_id && rr.line_user_id === att.line_user_id)
+  )
+}
+function regMatchesRider(reg, rider) {
+  if (reg.rider_id && rider.id && reg.rider_id === rider.id) return true
+  return !!(reg.line_user_id && rider.line_user_id && reg.line_user_id === rider.line_user_id)
+}
+function authFunctionUrl() {
+  return SUPABASE_URL.replace(/\/$/, '') + '/functions/v1/line-auth'
+}
+function scheduleLineRefresh() {
+  if (lineRefreshTimer) clearTimeout(lineRefreshTimer)
+  if (!lineSession) return
+  const delay = Math.max(5000, lineSession.expiresAt * 1000 - Date.now() - 60000)
+  lineRefreshTimer = setTimeout(() => {
+    refreshLineSession(true).catch(() => {})
+  }, delay)
+}
+async function refreshLineSession(force) {
+  if (!force && lineSession && lineSession.expiresAt * 1000 - Date.now() > 60000) return lineSession.token
+  if (!force && lineSessionPromise) return lineSessionPromise
+  const job = requestLineSession().finally(() => {
+    if (lineSessionPromise === job) lineSessionPromise = null
+  })
+  lineSessionPromise = job
+  return job
+}
+async function requestLineSession() {
+  const idToken = typeof liff !== 'undefined' && liff.getIDToken ? liff.getIDToken() : ''
+  if (!idToken) {
+    liff.login({ redirectUri: location.href })
+    return null
+  }
+  const res = await fetch(authFunctionUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY },
+    body: JSON.stringify({ id_token: idToken })
+  })
+  if (res.status === 401) {
+    try { liff.logout() } catch (e) { /* 重新登入仍要進行 */ }
+    liff.login({ redirectUri: location.href })
+    return null
+  }
+  if (!res.ok) throw new Error('line-auth')
+  const body = await res.json()
+  if (!body.access_token || !Number.isFinite(Number(body.expires_at))) throw new Error('line-auth')
+  lineSession = { token: body.access_token, expiresAt: Number(body.expires_at) }
+  scheduleLineRefresh()
+  return lineSession.token
 }
 function sortedRiders() {
   return [...allRiders].sort((a, b) => wkg(b) - wkg(a))
@@ -585,15 +662,23 @@ async function init() {
       db = createDemoDb()
       myProfile = { line_user_id: 'demo-me', name: '阿揚', avatar_url: '' }
     } else {
-      await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2')
-      db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+      await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0')
       await loadScript('https://static.line-scdn.net/liff/edge/2/sdk.js')
       await liff.init({ liffId: LIFF_ID })
-      if (!liff.isLoggedIn()) { liff.login(); return }
+      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return }
       const profile = await liff.getProfile()
       myProfile = { line_user_id: profile.userId, name: profile.displayName, avatar_url: profile.pictureUrl || '' }
+      const token = await refreshLineSession(true)
+      if (!token) return
+      db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+        accessToken: async () => {
+          const next = await refreshLineSession(false)
+          if (!next) throw new Error('line-auth')
+          return next
+        }
+      })
     }
-    const { data: me } = await db.from('riders').select('*').eq('line_user_id', myProfile.line_user_id).single()
+    const { data: me } = await readFrom('riders').select('*').eq('line_user_id', myProfile.line_user_id).single()
     myData = me
     if (!me) { revealPending(false); return }
     if (me.status === 'pending') { revealPending(true, me); return }
@@ -614,9 +699,9 @@ async function init() {
     const tab = params.get('tab')
     if (tab && document.getElementById('tab-' + tab)) switchTab(tab)
   } catch (e) {
+    console.error(e)
     const el = document.querySelector('.loading-text')
     if (el) el.textContent = '載入失敗，請重新整理'
-    if (!DEMO) console.error(e)
   }
 }
 function revealPending(existing, me) {
@@ -683,18 +768,18 @@ async function savePendingProfile() {
     status: 'pending',
     updated_at: new Date().toISOString()
   }
-  const { data: existing } = await db.from('riders').select('id').eq('line_user_id', myProfile.line_user_id).single()
+  const { data: existing } = await readFrom('riders').select('id').eq('line_user_id', myProfile.line_user_id).single()
   const res = existing
-    ? await db.from('riders').update(payload).eq('line_user_id', myProfile.line_user_id)
+    ? await db.from('riders').update(payload).eq('id', existing.id)
     : await db.from('riders').insert(Object.assign({}, payload, { last_seen: new Date().toISOString() }))
   if (res.error) { showToast('送出失敗，請再試一次'); return }
   showToast('資料已儲存，等待管理員審核')
 }
 async function updateLastSeen() {
-  await db.from('riders').update({ last_seen: new Date().toISOString() }).eq('line_user_id', myProfile.line_user_id)
+  await db.from('riders').update({ last_seen: new Date().toISOString() }).eq('id', myData.id)
 }
 async function loadRiders() {
-  const { data } = await db.from('riders').select('*').eq('status', 'approved').gt('ftp', 0).gt('weight', 0).order('ftp', { ascending: false })
+  const { data } = await readFrom('riders').select('*').eq('status', 'approved').gt('ftp', 0).gt('weight', 0).order('ftp', { ascending: false })
   allRiders = data || []
 }
 async function loadLocations() {
@@ -746,13 +831,13 @@ function riderBlock(r, place) {
   const count = r.attendance_count || 0
   const legend = count >= 48 ? ' is-legend' : ''
   const champ = place === 1 ? ' is-champ' : ''
-  const isMe = myProfile && r.line_user_id === myProfile.line_user_id
+  const mine = isMe(r)
   const placeBg = place === 1 ? '#C026D3' : place === 2 ? '#E62B8A' : '#33C8E8'
-  return `<div class="p-person" data-flip="${esc(r.line_user_id)}">
+  return `<div class="p-person" data-flip="${esc(r.id)}">
     ${place === 1 ? `<div class="crown">${icon('crown', 22)}</div>` : ''}
     <div class="av-ring${legend}${champ}">${avatarHtml(r.avatar_url, r.name, place === 1 ? 84 : 64, r.avatar_url ? '' : placeBg)}</div>
-    <div class="p-name">${nameHtml(r)}${isMe ? '<span class="me-tag">我</span>' : ''}</div>
-    <div class="p-wkg"><span data-tween="${wkg(r).toFixed(2)}" data-digits="2" data-key="pod-${esc(r.line_user_id)}">0</span><small>W/kg</small></div>
+    <div class="p-name">${nameHtml(r)}${mine ? '<span class="me-tag">我</span>' : ''}</div>
+    <div class="p-wkg"><span data-tween="${wkg(r).toFixed(2)}" data-digits="2" data-key="pod-${esc(r.id)}">0</span><small>W/kg</small></div>
     <div class="p-meta"><span>${esc(r.ftp)} W</span><span class="cat-badge ${ct.cls}">${ct.label}</span></div>
   </div>`
 }
@@ -782,17 +867,17 @@ function renderLeaderboard() {
   list.classList.toggle('rise', !lbPainted)
   list.innerHTML = rest.length ? rest.map((r, idx) => {
     const rank = idx + 4
-    const isMe = myProfile && r.line_user_id === myProfile.line_user_id
+    const mine = isMe(r)
     const ct = cat(wkg(r))
     const count = r.attendance_count || 0
     const title = titleBadge(count)
     const pct = Math.max(0, Math.min(100, (wkg(r) / WKG_SCALE) * 100))
-    return `<article class="rider-row${isMe ? ' is-me' : ''}" data-flip="${esc(r.line_user_id)}">
+    return `<article class="rider-row${mine ? ' is-me' : ''}" data-flip="${esc(r.id)}">
       <div class="rider-top">
         <div class="rank">${rank}</div>
         ${avatarHtml(r.avatar_url, r.name, 40)}
         <div class="rider-info">
-          <div class="rider-name">${nameHtml(r)}${isMe ? '<span class="me-tag">我</span>' : ''}<span class="cat-badge ${ct.cls}">${ct.label}</span>${title ? `<span class="title-pill">${esc(title)}</span>` : ''}</div>
+          <div class="rider-name">${nameHtml(r)}${mine ? '<span class="me-tag">我</span>' : ''}<span class="cat-badge ${ct.cls}">${ct.label}</span>${title ? `<span class="title-pill">${esc(title)}</span>` : ''}</div>
           <div class="rider-mood">${r.mood ? '「' + esc(r.mood) + '」' : ''}${count > 0 ? `<span class="att-count">${count}次出席</span>` : ''}</div>
         </div>
         <div class="rider-stats">
@@ -804,7 +889,7 @@ function renderLeaderboard() {
     </article>`
   }).join('') : (filtered.length ? '<div class="empty-state">前三名都在頒獎台上</div>' : '')
   const dock = document.getElementById('me-dock')
-  const me = myProfile && filtered.find(r => r.line_user_id === myProfile.line_user_id)
+  const me = myProfile && filtered.find(r => isMe(r))
   const meAll = currentRider()
   if (!meAll || !(meAll.ftp > 0 && meAll.weight > 0)) {
     dock.hidden = true
@@ -845,14 +930,14 @@ function renderMatch() {
   const card = document.getElementById('match-me-card')
   const list = document.getElementById('match-list')
   if (!myProfile) return
-  const me = allRiders.find(r => r.line_user_id === myProfile.line_user_id)
+  const me = allRiders.find(r => isMe(r))
   if (!me) {
     card.innerHTML = '<div>請先到「我的資料」填寫 FTP 和體重</div>'
     list.innerHTML = ''
     return
   }
   card.innerHTML = `${avatarHtml(me.avatar_url, me.name, 52)}<div class="match-me-info"><div class="name">${esc(me.name)}</div><div class="stats">FTP ${esc(me.ftp)}W · ${wkgStr(me)} W/kg · ${cat(wkg(me)).label}</div></div>`
-  const ranked = allRiders.filter(r => r.line_user_id !== myProfile.line_user_id).map(r => Object.assign({}, r, { sim: similarity(me, r) })).sort((a, b) => b.sim - a.sim)
+  const ranked = allRiders.filter(r => !isMe(r)).map(r => Object.assign({}, r, { sim: similarity(me, r) })).sort((a, b) => b.sim - a.sim)
   list.innerHTML = ranked.map(r => {
     const simCls = r.sim >= 80 ? 'sim-high' : r.sim >= 60 ? 'sim-mid' : 'sim-low'
     const fDiff = me.ftp - r.ftp
@@ -941,7 +1026,7 @@ function renderProfile() {
   const stats = document.getElementById('profile-stats')
   if (me && me.ftp && me.weight) {
     const sorted = sortedRiders()
-    const rank = sorted.findIndex(r => r.line_user_id === me.line_user_id) + 1
+    const rank = sorted.findIndex(r => isSameRider(r, me)) + 1
     stats.innerHTML = `<div class="stat-3">
       <div class="stat-tile"><div class="stat-lbl">W/KG</div><div class="stat-val">${wkgStr(me)}</div></div>
       <div class="stat-tile"><div class="stat-lbl">隊內排名</div><div class="stat-val">#${rank}<span class="unit">/${sorted.length}</span></div></div>
@@ -1039,13 +1124,13 @@ async function saveProfile() {
   }
   const prevRiders = allRiders.map(r => Object.assign({}, r))
   const prevData = myData ? Object.assign({}, myData) : null
-  const idx = allRiders.findIndex(r => r.line_user_id === myProfile.line_user_id)
+  const idx = allRiders.findIndex(r => isMe(r))
   if (idx >= 0) allRiders[idx] = Object.assign({}, allRiders[idx], payload)
   myData = Object.assign({}, myData || {}, payload)
   renderLeaderboard(); renderMatch(); renderProfile(); renderPace()
   showToast('儲存中…')
   savingProfile = true
-  const { error } = await db.from('riders').update(payload).eq('line_user_id', myProfile.line_user_id)
+  const { error } = await db.from('riders').update(payload).eq('id', myData.id)
   savingProfile = false
   if (error) {
     allRiders = prevRiders
@@ -1330,7 +1415,7 @@ async function renderRides() {
   const rides = data || []
   const activeRides = rides.filter(r => !r.is_finished)
   const finishedRides = rides.filter(r => r.is_finished)
-  const { data: allAttsTotal } = await db.from('attendances').select('ride_id')
+  const { data: allAttsTotal } = await readFrom('attendances').select('ride_id')
   const totalRides = finishedRides.length
   const totalAttendances = (allAttsTotal || []).length
   const myAttendances = currentRider()?.attendance_count || 0
@@ -1344,10 +1429,10 @@ async function renderRides() {
     list.innerHTML = statsHtml + '<div class="empty-state">目前沒有團騎公告</div>'
     return
   }
-  const { data: myRegs } = await db.from('registrations').select('ride_id').eq('line_user_id', myProfile.line_user_id)
-  const myRegIds = new Set((myRegs || []).map(r => r.ride_id))
-  const { data: allRegs } = await db.from('registrations').select('*')
-  const { data: allAtts } = await db.from('attendances').select('*')
+  const { data: myRegs } = await readFrom('registrations').select('id, ride_id').eq('line_user_id', myProfile.line_user_id)
+  myRegByRide = new Map((myRegs || []).filter(r => r.id && r.ride_id).map(r => [r.ride_id, r.id]))
+  const { data: allRegs } = await readFrom('registrations').select('*')
+  const { data: allAtts } = await readFrom('attendances').select('*')
   const cards = await Promise.all(rides.map(async r => {
     const loc = splitLoc(r.location)
     let lat = r.weather_lat
@@ -1367,11 +1452,11 @@ async function renderRides() {
     const rideAtts = (allAtts || []).filter(att => att.ride_id === r.id)
     let group = ''
     if (rideAtts.length) {
-      const attRiders = rideAtts.map(a => allRiders.find(rr => rr.line_user_id === a.line_user_id)).filter(Boolean)
+      const attRiders = rideAtts.map(riderForAttendance).filter(Boolean)
       if (attRiders.length) {
         const avg = attRiders.reduce((s, rr) => s + wkg(rr), 0) / attRiders.length
         const speeds = calcGroupSpeed(avg)
-        if (!speeds) return rideCardHtml(r, { regs: rideRegs, mine: myRegIds.has(r.id), weather, aqi, group: '', loc })
+        if (!speeds) return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), weather, aqi, group: '', loc })
         group = `<div class="group-stats-card"><div class="group-stats-title">${icon('activity', 14)}當天出席戰力分析</div><div class="group-stats-grid">
           <div class="group-stat"><div class="val">${attRiders.length}</div><div class="lbl">出席人數</div></div>
           <div class="group-stat"><div class="val">${avg.toFixed(2)}</div><div class="lbl">平均 W/kg</div></div>
@@ -1379,7 +1464,7 @@ async function renderRides() {
         </div></div>`
       }
     }
-    return rideCardHtml(r, { regs: rideRegs, mine: myRegIds.has(r.id), weather, aqi, group, loc })
+    return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), weather, aqi, group, loc })
   }))
   const activeCards = cards.filter((_, i) => !rides[i].is_finished)
   const finishedCards = cards.filter((_, i) => rides[i].is_finished)
@@ -1464,8 +1549,14 @@ async function toggleRegistration(rideId, isRegistered) {
   const card = document.getElementById('ride-' + rideId)
   const btn = card && card.querySelector('[data-act="reg"]')
   if (btn) { btn.disabled = true; btn.textContent = isRegistered ? '取消中…' : '送出中…' }
+  const existingId = myRegByRide.get(rideId)
+  if (isRegistered && !existingId) {
+    showToast('取消失敗，請再試一次')
+    renderRides()
+    return
+  }
   const res = isRegistered
-    ? await db.from('registrations').delete().eq('ride_id', rideId).eq('line_user_id', myProfile.line_user_id)
+    ? await db.from('registrations').delete().eq('id', existingId)
     : await db.from('registrations').insert({ ride_id: rideId, line_user_id: myProfile.line_user_id, name: myProfile.name, avatar_url: myProfile.avatar_url || '' })
   if (res.error) {
     showToast(isRegistered ? '取消失敗，請再試一次' : '報名失敗，請再試一次')
@@ -1483,53 +1574,74 @@ async function showAttendancePanel(rideId) {
   panel.dataset.open = '1'
   panel.hidden = false
   panel.innerHTML = '<div class="empty-state">載入中...</div>'
-  const { data: regs } = await db.from('registrations').select('*').eq('ride_id', rideId)
-  const { data: atts } = await db.from('attendances').select('*').eq('ride_id', rideId)
-  const attIds = new Set((atts || []).map(a => a.line_user_id))
-  const extras = allRiders.filter(r => !(regs || []).find(reg => reg.line_user_id === r.line_user_id))
-  panel.innerHTML = `<div class="attend-list">${(regs || []).map(m => `
+  const { data: regs } = await readFrom('registrations').select('*').eq('ride_id', rideId)
+  const { data: atts } = await readFrom('attendances').select('*').eq('ride_id', rideId)
+  const attByUser = new Map()
+  ;(atts || []).forEach(a => {
+    if (a.line_user_id) attByUser.set(a.line_user_id, a)
+    if (a.rider_id) attByUser.set('id:' + a.rider_id, a)
+  })
+  const extras = allRiders.filter(r => !(regs || []).find(reg => regMatchesRider(reg, r)))
+  panel.innerHTML = `<div class="attend-list">${(regs || []).map(m => {
+    const att = attByUser.get(m.line_user_id) || attByUser.get('id:' + m.rider_id)
+    const rider = allRiders.find(r => regMatchesRider(m, r))
+    return `
     <div class="attend-row">${avatarHtml(m.avatar_url, m.name, 28)}<span class="name">${esc(m.name)}</span>
-      <button class="attend-check${attIds.has(m.line_user_id) ? ' checked' : ''}" type="button" data-act="toggle-att" data-ride="${esc(rideId)}" data-uid="${esc(m.line_user_id)}">${attIds.has(m.line_user_id) ? icon('check', 16) : ''}</button>
-    </div>`).join('') || '<div class="empty-state">還沒有人報名</div>'}</div>
+      <button class="attend-check${att ? ' checked' : ''}" type="button" data-act="toggle-att" data-ride="${esc(rideId)}" data-uid="${esc(m.line_user_id || '')}" data-rider="${esc((rider && rider.id) || m.rider_id || '')}" data-att="${esc(att ? att.id : '')}">${att ? icon('check', 16) : ''}</button>
+    </div>`
+  }).join('') || '<div class="empty-state">還沒有人報名</div>'}</div>
     <div class="zone-title">臨時加入</div>
     <div class="add-attendee-row">
-      <select id="extra-member-${esc(rideId)}"><option value="">選擇成員</option>${extras.map(r => `<option value="${esc(r.line_user_id)}">${esc(r.name)}</option>`).join('')}</select>
+      <select id="extra-member-${esc(rideId)}"><option value="">選擇成員</option>${extras.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('')}</select>
       <button type="button" data-act="add-extra" data-id="${esc(rideId)}">加入</button>
     </div>`
 }
-async function toggleAttendance(rideId, lineUserId, btn) {
-  const rider = allRiders.find(r => r.line_user_id === lineUserId)
+async function toggleAttendance(rideId, btn) {
+  const lineUserId = btn.dataset.uid
+  const rider = allRiders.find(r => r.id === btn.dataset.rider) || allRiders.find(r => r.line_user_id === lineUserId)
   const name = rider?.name || ''
   const avatarUrl = rider?.avatar_url || ''
   const isChecked = btn.classList.contains('checked')
+  if (!rider) { showToast('找不到這位成員'); return }
   if (isChecked) {
-    await db.from('attendances').delete().eq('ride_id', rideId).eq('line_user_id', lineUserId)
-    const { data } = await db.from('riders').select('attendance_count').eq('line_user_id', lineUserId).single()
+    if (!btn.dataset.att) { showToast('請重新開啟出席名單'); return }
+    await db.from('attendances').delete().eq('id', btn.dataset.att)
+    const { data } = await readFrom('riders').select('attendance_count').eq('id', rider.id).single()
     const newCount = Math.max(0, (data?.attendance_count || 0) - 1)
-    await db.from('riders').update({ attendance_count: newCount }).eq('line_user_id', lineUserId)
+    await db.from('riders').update({ attendance_count: newCount }).eq('id', rider.id)
     btn.classList.remove('checked')
+    btn.dataset.att = ''
     btn.innerHTML = ''
     showToast('已取消出席')
   } else {
-    await db.from('attendances').upsert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl })
-    const { data } = await db.from('riders').select('attendance_count').eq('line_user_id', lineUserId).single()
-    const newCount = (data?.attendance_count || 0) + 1
-    await db.from('riders').update({ attendance_count: newCount }).eq('line_user_id', lineUserId)
+    const inserted = await db.from('attendances').insert({ ride_id: rideId, line_user_id: lineUserId, name, avatar_url: avatarUrl }).select('id')
+    if (inserted.error && inserted.error.code !== '23505') {
+      showToast('出席記錄失敗')
+      return
+    }
+    const created = Array.isArray(inserted.data) ? inserted.data[0] : inserted.data
+    if (created?.id) btn.dataset.att = created.id
+    if (!inserted.error) {
+      const { data } = await readFrom('riders').select('attendance_count').eq('id', rider.id).single()
+      const newCount = (data?.attendance_count || 0) + 1
+      await db.from('riders').update({ attendance_count: newCount }).eq('id', rider.id)
+    }
     btn.classList.add('checked')
     btn.innerHTML = icon('check', 16)
     showToast('已確認出席')
   }
   await loadRiders()
   renderLeaderboard()
-  if (myProfile && lineUserId === myProfile.line_user_id) renderProfile()
+  if (isMe(rider)) renderProfile()
 }
 async function addExtraAttendee(rideId) {
   const sel = document.getElementById('extra-member-' + rideId)
-  const lineUserId = sel.value
-  if (!lineUserId) { showToast('請選擇成員'); return }
-  const rider = allRiders.find(r => r.line_user_id === lineUserId)
-  if (!rider) return
-  await db.from('registrations').upsert({ ride_id: rideId, line_user_id: lineUserId, name: rider.name, avatar_url: rider.avatar_url || '' })
+  const riderId = sel.value
+  if (!riderId) { showToast('請選擇成員'); return }
+  const rider = allRiders.find(r => r.id === riderId)
+  if (!rider || !rider.line_user_id) return
+  const inserted = await db.from('registrations').insert({ ride_id: rideId, line_user_id: rider.line_user_id, name: rider.name, avatar_url: rider.avatar_url || '' })
+  if (inserted.error && inserted.error.code !== '23505') { showToast('加入失敗'); return }
   showToast(rider.name + ' 已加入')
   await showAttendancePanel(rideId)
   await showAttendancePanel(rideId)
@@ -1622,7 +1734,7 @@ function toggleFinishedSection() {
 }
 
 async function renderAdmin() {
-  const { data } = await db.from('riders').select('*').order('last_seen', { ascending: false })
+  const { data } = await readFrom('riders').select('*').order('last_seen', { ascending: false })
   adminCache = data || []
   const pending = adminCache.filter(r => r.status === 'pending')
   const approved = adminCache.filter(r => r.status === 'approved')
@@ -1638,8 +1750,8 @@ async function renderAdmin() {
       </div>
       ${r.mood ? `<div class="rider-mood">「${esc(r.mood)}」</div>` : ''}
       <div class="admin-actions">
-        <button class="approve-btn" type="button" data-act="approve" data-uid="${esc(r.line_user_id)}">核准</button>
-        <button class="kick-btn" type="button" data-act="kick" data-uid="${esc(r.line_user_id)}">拒絕</button>
+        <button class="approve-btn" type="button" data-act="approve" data-id="${esc(r.id)}">核准</button>
+        <button class="kick-btn" type="button" data-act="kick" data-id="${esc(r.id)}">拒絕</button>
       </div>
     </article>`).join('') : '<div class="empty-state">沒有待審核的成員</div>'
   document.getElementById('admin-active').innerHTML = approved.length ? approved.map(r => {
@@ -1659,7 +1771,7 @@ async function renderAdmin() {
         <div class="admin-stat"><div class="val">${r.attendance_count || 0}</div><div class="lbl">出席次數</div></div>
         <div class="admin-stat span-2"><div class="val">${esc(title || '—')}</div><div class="lbl">稱號</div></div>
       </div>
-      <div class="admin-actions"><button class="kick-btn" type="button" data-act="kick" data-uid="${esc(r.line_user_id)}">踢除成員</button></div>
+      <div class="admin-actions"><button class="kick-btn" type="button" data-act="kick" data-id="${esc(r.id)}">踢除成員</button></div>
     </article>`
   }).join('') : '<div class="empty-state">沒有已核准的成員</div>'
   renderLocationAdmin()
@@ -1747,15 +1859,15 @@ function editGuideline(id) {
   }
   document.getElementById('gl-category').scrollIntoView({ behavior: 'smooth' })
 }
-async function approveMember(lineUserId) {
-  await db.from('riders').update({ status: 'approved' }).eq('line_user_id', lineUserId)
+async function approveMember(riderId) {
+  await db.from('riders').update({ status: 'approved' }).eq('id', riderId)
   showToast('已核准')
   renderAdmin()
   await loadRiders()
   renderLeaderboard()
 }
-async function kickMember(lineUserId) {
-  const rider = adminCache.find(r => r.line_user_id === lineUserId)
+async function kickMember(riderId) {
+  const rider = adminCache.find(r => r.id === riderId)
   const ok = await askConfirm({
     title: rider && rider.status === 'pending' ? '拒絕申請' : '移除成員',
     body: '確定要移除「' + (rider?.name || '這位成員') + '」？此動作無法復原。',
@@ -1763,7 +1875,7 @@ async function kickMember(lineUserId) {
     danger: true
   })
   if (!ok) return
-  await db.from('riders').delete().eq('line_user_id', lineUserId)
+  await db.from('riders').delete().eq('id', riderId)
   showToast('已移除成員')
   renderAdmin()
   await loadRiders()
@@ -1786,7 +1898,7 @@ function switchTab(id) {
   if (id === 'admin' && isAdmin) renderAdmin()
   if (id === 'pace') renderPace()
   syncChrome()
-  window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
 }
 function switchAdminTab(id) {
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === id))
@@ -1844,13 +1956,13 @@ function onGlobalClick(e) {
   else if (act === 'edit-ride') showEditRideForm(el.dataset.id)
   else if (act === 'finish') toggleFinished(el.dataset.id, el.dataset.finished === '1')
   else if (act === 'attend-panel') showAttendancePanel(el.dataset.id)
-  else if (act === 'toggle-att') toggleAttendance(el.dataset.ride, el.dataset.uid, el)
+  else if (act === 'toggle-att') toggleAttendance(el.dataset.ride, el)
   else if (act === 'add-extra') addExtraAttendee(el.dataset.id)
   else if (act === 'update-ride') updateRide(el.dataset.id)
   else if (act === 'close-edit') { const box = document.getElementById('edit-ride-form-' + el.dataset.id); if (box) box.innerHTML = '' }
   else if (act === 'toggle-finished') toggleFinishedSection()
-  else if (act === 'approve') approveMember(el.dataset.uid)
-  else if (act === 'kick') kickMember(el.dataset.uid)
+  else if (act === 'approve') approveMember(el.dataset.id)
+  else if (act === 'kick') kickMember(el.dataset.id)
   else if (act === 'del-loc') deleteLocation(el.dataset.id)
   else if (act === 'del-gl') deleteGuideline(el.dataset.id)
   else if (act === 'edit-gl') editGuideline(el.dataset.id)
