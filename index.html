@@ -7,16 +7,17 @@
 <title>PACE 沛速車隊</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow+Condensed:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="icon" href="assets/waves.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-tab="leaderboard">
 <div id="loading" class="loading-screen">
   <div class="loading-brand">
-    <div class="logo-mark" aria-label="PACE">PACE</div>
-    <div class="loading-zh">沛速車隊</div>
-    <div class="loading-en">FIND YOUR RHYTHM. KEEP THE LEAD.</div>
+    <picture class="logo-slot">
+      <source srcset="assets/pace-lockup.webp" type="image/webp">
+      <img class="logo-lockup" src="assets/pace-lockup.png" width="774" height="357" alt="PACE 沛速車隊">
+    </picture>
     <div class="loading-text">載入中...</div>
   </div>
 </div>
@@ -25,7 +26,10 @@
 
 <div id="app" hidden>
   <aside class="side-nav" aria-label="主選單">
-    <div class="side-logo logo-mark" aria-hidden="true">PACE</div>
+    <picture class="logo-slot side-logo">
+      <source srcset="assets/pace-wordmark.webp" type="image/webp">
+      <img class="logo-mark" src="assets/pace-wordmark.png" width="742" height="221" alt="PACE 沛速車隊">
+    </picture>
     <button class="nav-btn active" type="button" data-nav="leaderboard" data-act="tab" data-tab="leaderboard">
       <span data-icon="trophy" data-size="22"></span><span class="nav-label">排行榜</span>
     </button>
@@ -47,7 +51,10 @@
     <div class="shell-inner">
       <header class="topbar">
         <div class="brand">
-          <div class="logo-mark" aria-label="PACE">PACE</div>
+          <picture class="logo-slot">
+            <source srcset="assets/pace-wordmark.webp" type="image/webp">
+            <img class="logo-mark" src="assets/pace-wordmark.png" width="742" height="221" alt="PACE 沛速車隊">
+          </picture>
           <div class="brand-text">
             <h1 id="page-title">戰力排行榜</h1>
             <p id="page-sub">沛速車隊 · W/KG RANKING</p>
