@@ -22,7 +22,6 @@
   --garmin: #1A73E8;
   --font-num: "Barlow Condensed", "Arial Narrow", sans-serif;
   --font-zh: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-  --font-logo: "Archivo Black", "Arial Black", sans-serif;
   --nav-h: 76px;
   --radius: 18px;
   --shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
@@ -60,18 +59,18 @@ img { max-width: 100%; }
   letter-spacing: .02em;
 }
 
+.logo-slot { display: block; line-height: 0; flex: none; }
 .logo-mark {
-  font-family: var(--font-logo);
-  font-size: 30px;
-  line-height: .85;
-  letter-spacing: -0.04em;
-  background-image: url("assets/waves.svg");
-  background-size: 140px 48px;
-  background-repeat: repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
+  display: block;
+  height: 24px;
+  width: auto;
+  max-width: none;
+}
+.logo-lockup {
+  display: block;
+  width: min(380px, 86vw);
+  height: auto;
+  margin-inline: auto;
 }
 
 .loading-screen, .pending-screen {
@@ -85,8 +84,6 @@ img { max-width: 100%; }
     radial-gradient(900px 420px at 50% 0%, var(--bg-navy-2), var(--bg-navy) 46%, var(--bg-0) 80%);
 }
 .loading-brand, .pending-wrap { text-align: center; width: min(440px, 100%); }
-.loading-zh { margin-top: 10px; font-size: 18px; font-weight: 700; letter-spacing: .2em; }
-.loading-en { margin-top: 6px; font-size: 11px; letter-spacing: .14em; color: var(--text-dim); }
 .loading-text { margin-top: 18px; color: var(--text-dim); }
 .pending-wrap { text-align: left; }
 .pending-mark { text-align: center; margin-bottom: 12px; }
@@ -683,7 +680,9 @@ input[type=range]::-moz-range-thumb {
     flex-direction: column; align-items: center; gap: 6px; padding: 18px 10px;
     background: rgba(8, 12, 20, .9); border-right: 1px solid var(--line);
   }
-  .side-logo { font-size: 16px; margin-bottom: 12px; }
+  .topbar .logo-mark { height: 32px; }
+  .side-logo { margin-bottom: 12px; }
+  .side-logo .logo-mark { height: 22px; }
   .side-nav .nav-btn {
     width: 76px; border: 0; background: transparent; color: var(--text-dim);
     border-radius: 16px; padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px;

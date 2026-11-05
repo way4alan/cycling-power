@@ -719,7 +719,7 @@ function showPendingForm(existing, me) {
   const tireWidth = me?.tire_width || ''
   screen.innerHTML = `
     <div class="pending-wrap">
-      <div class="pending-mark"><div class="logo-mark">PACE</div><div class="loading-zh">沛速車隊</div></div>
+      <div class="pending-mark"><picture class="logo-slot"><source srcset="assets/pace-lockup.webp" type="image/webp"><img class="logo-lockup" src="assets/pace-lockup.png" width="774" height="357" alt="PACE 沛速車隊"></picture></div>
       <h2>${existing ? '審核中' : '申請加入 PACE'}</h2>
       <p class="pending-lead">${existing ? '你的申請正在等待管理員審核，先填好資料，審核通過後立即出現在排行榜。' : '請填寫你的資料，送出後等待管理員審核。'}</p>
       <div class="form-row"><label for="p-ftp">FTP（瓦特）</label><input type="number" id="p-ftp" placeholder="例如 280" value="${esc(ftp)}" oninput="updatePendingPreview()"></div>
