@@ -195,6 +195,107 @@ check('other registration hides line_user_id but keeps name and rider id',
 const stale = await api(expired, 'GET', '/rides?select=id')
 check('expired JWT is rejected', stale.status === 401, stale.text)
 
+const anonRoutes = await api(anon, 'GET', '/routes?select=id')
+check('anon cannot read routes', !ok(anonRoutes.status), anonRoutes.text)
+const anonTemplates = await api(anon, 'POST', '/ride_templates', { title: '偷', time: '06:00', location: '偷' })
+check('anon cannot insert a template', !ok(anonTemplates.status), anonTemplates.text)
+const anonGroups = await api(anon, 'GET', '/ride_groups?select=id')
+check('anon cannot read ride groups', !ok(anonGroups.status), anonGroups.text)
+
+const memberTemplate = await api(member, 'POST', '/ride_templates', { title: '偷範本', time: '06:00', location: '偷' })
+check('member cannot create a template', !ok(memberTemplate.status), memberTemplate.text)
+const memberTemplateRead = await api(member, 'GET', '/ride_templates?select=id,title')
+check('member cannot read templates', ok(memberTemplateRead.status) && (memberTemplateRead.json || []).length === 0, memberTemplateRead.text)
+const memberGroupWrite = await api(member, 'POST', '/ride_groups', { ride_id: RIDE_ID, name: '偷組', pace_note: 'x' })
+check('member cannot create a ride group', !ok(memberGroupWrite.status), memberGroupWrite.text)
+const memberRouteWrite = await api(member, 'POST', '/routes', { title: '偷路線', garmin_url: 'https://connect.garmin.com/modern/course/999' })
+check('member cannot create a route', !ok(memberRouteWrite.status), memberRouteWrite.text)
+
+const badUrl = await api(admin, 'POST', '/routes', { title: '壞連結', garmin_url: 'javascript:alert(1)' })
+check('admin cannot store a javascript route URL', !ok(badUrl.status), badUrl.text)
+const route = await api(admin, 'POST', '/routes', {
+  title: '壽山',
+  garmin_course_id: '123456',
+  garmin_url: 'https://connect.garmin.com/modern/course/123456',
+  original_url: 'https://connect.garmin.com/modern/course/123456',
+  distance_km: 42,
+  ascent_m: 380,
+  distance_estimated: true,
+  ascent_estimated: true,
+  notes: '公開路線',
+  track: [],
+  point_count: 0
+}, 'return=representation')
+check('admin can save a route', ok(route.status) && route.json?.[0]?.id, route.text)
+const routeId = route.json?.[0]?.id
+const memberRouteRead = await api(member, 'GET', `/routes?id=eq.${routeId}&select=title,notes`)
+check('approved member can read a route', ok(memberRouteRead.status) && memberRouteRead.json?.[0]?.title === '壽山', memberRouteRead.text)
+const routeHack = await api(member, 'PATCH', `/routes?id=eq.${routeId}`, { title: '被改' })
+check('member did not change a route', (await sql(`select title from public.routes where id = '${routeId}'`)) === '壽山', routeHack.text)
+await api(admin, 'PATCH', `/riders?id=eq.${PENDING_ID}`, { status: 'pending' })
+const pendingRoutes = await api(pending, 'GET', '/routes?select=id')
+check('pending member does not receive routes', (pendingRoutes.json || []).length === 0, pendingRoutes.text)
+
+const group = await api(admin, 'POST', '/ride_groups', {
+  ride_id: RIDE_ID, name: 'A 組', pace_note: '有人輪帶', sort_order: 0
+}, 'return=representation')
+check('admin can define a ride group', ok(group.status) && group.json?.[0]?.id, group.text)
+const groupId = group.json?.[0]?.id
+const otherRide = await api(admin, 'POST', '/rides', {
+  title: '另一場', date: '2026-12-01', time: '06:30', location: '壽山'
+}, 'return=representation')
+const otherRideId = otherRide.json?.[0]?.id
+const otherGroup = await api(admin, 'POST', '/ride_groups', {
+  ride_id: otherRideId, name: 'B 組', pace_note: '輕鬆', sort_order: 0
+}, 'return=representation')
+const otherGroupId = otherGroup.json?.[0]?.id
+const wrongGroup = await api(member, 'POST', '/registrations', {
+  ride_id: RIDE_ID, line_user_id: B, name: '甲', group_id: otherGroupId
+})
+check('member cannot join a group from another ride', !ok(wrongGroup.status), wrongGroup.text)
+check('wrong group did not create a registration',
+  (await sql(`select count(*) from public.registrations where ride_id = '${RIDE_ID}' and group_id = '${otherGroupId}'`)) === '0')
+const grouped = await api(member, 'POST', '/registrations', {
+  ride_id: RIDE_ID, line_user_id: B, name: '甲', avatar_url: '', group_id: groupId
+})
+check('member can sign up with a group on that ride', ok(grouped.status), grouped.text)
+check('grouped signup keeps the JWT line id',
+  (await sql(`select line_user_id || '|' || group_id from public.registrations where ride_id = '${RIDE_ID}' and name = '甲'`)) === `${A}|${groupId}`)
+const groupedView = await api(other, 'GET', `/registrations_directory?ride_id=eq.${RIDE_ID}&select=line_user_id,group_id,name`)
+const groupedRow = (groupedView.json || []).find((row) => row.name === '甲')
+check('another member sees the group but not the line id',
+  ok(groupedView.status) && groupedRow && groupedRow.line_user_id === null && groupedRow.group_id === groupId,
+  groupedView.text)
+
+const copied = await api(admin, 'POST', '/rides', {
+  title: '晨騎',
+  date: '2026-12-14',
+  time: '06:00',
+  location: '愛河之心',
+  garmin_code: '',
+  garmin_url: 'https://connect.garmin.com/modern/course/123456',
+  note: '帶水',
+  is_finished: false,
+  cancelled: false,
+  source_key: `ride:${RIDE_ID}:2026-12-14`
+}, 'return=representation')
+check('admin can publish a copied ride', ok(copied.status) && copied.json?.[0]?.id, copied.text)
+const copiedId = copied.json?.[0]?.id
+check('copied ride did not keep a groupride code or people',
+  (await sql(`select coalesce(garmin_code, '') || '|' || is_finished::text || '|' || cancelled::text || '|' || (select count(*)::text from public.registrations where ride_id = '${copiedId}') from public.rides where id = '${copiedId}'`)) === '|false|false|0')
+const again = await api(admin, 'POST', '/rides', {
+  title: '晨騎', date: '2026-12-14', time: '06:00', location: '愛河之心', source_key: `ride:${RIDE_ID}:2026-12-14`
+})
+check('the same copy cannot be published twice', !ok(again.status), again.text)
+check('duplicate copy did not add a row',
+  (await sql(`select count(*) from public.rides where source_key = 'ride:${RIDE_ID}:2026-12-14'`)) === '1')
+const template = await api(admin, 'POST', '/ride_templates', {
+  title: '週日晨騎', time: '06:00', location: '愛河之心', garmin_url: 'https://connect.garmin.com/modern/course/123456'
+}, 'return=representation')
+check('admin can save a template without creating a ride', ok(template.status) && template.json?.[0]?.id, template.text)
+check('saving a template did not add another ride',
+  (await sql(`select count(*) from public.rides where title = '週日晨騎'`)) === '0')
+
 const mock = http.createServer((req, res) => {
   let data = ''
   req.on('data', (chunk) => { data += chunk })

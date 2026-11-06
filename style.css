@@ -30,6 +30,7 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { min-height: 100%; }
+html { overflow-x: hidden; }
 body {
   font-family: var(--font-zh);
   color: var(--text);
@@ -93,7 +94,44 @@ img { max-width: 100%; }
 
 .side-nav { display: none; }
 .shell-inner { width: min(1120px, 100%); margin: 0 auto; }
-.content { padding: 0 16px calc(var(--nav-h) + 28px); }
+.content { padding: 0 16px calc(var(--nav-h) + 28px); max-width: 100%; }
+.demo-banner {
+  margin: 0; padding: 8px 16px; text-align: center; font-size: 13px; line-height: 1.5;
+  background: #3a1240; color: #ffd6ea; border-bottom: 1px solid rgba(230, 43, 138, .45);
+}
+.field-help { color: var(--text-dim); font-size: 12px; line-height: 1.5; margin: 4px 0 8px; }
+.check-line { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 4px 0 12px; }
+.rule-note, .monthly-board p, .studio-note { color: var(--text-dim); font-size: 13px; line-height: 1.55; }
+.next-ride { margin-bottom: 16px; }
+.next-ride .ride-card { margin-bottom: 0; }
+.p-person.is-empty { opacity: .72; min-height: 92px; display: grid; place-items: center; text-align: center; }
+.p-recent { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+.monthly-board, .studio-card, .route-card { margin-top: 16px; }
+.monthly-row, .bulk-row, .template-row, .group-block {
+  display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--line); min-width: 0;
+}
+.monthly-row b, .group-block b { font-family: var(--font-num); font-size: 22px; }
+.group-people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.group-people span { font-size: 12px; color: var(--text-dim); }
+.reg-status { font-weight: 700; margin-bottom: 8px; }
+.route-svg { width: 100%; height: auto; display: block; background: #07111c; border-radius: 16px; }
+.route-svg polyline { fill: none; stroke: #E62B8A; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.announce-card { width: min(560px, 100%); }
+.announce-text {
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  background: #0c121c; border-radius: 12px; padding: 12px; font-family: var(--font-zh);
+  font-size: 14px; line-height: 1.55; max-height: 46vh; overflow: auto;
+}
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.studio-card h2, .route-card h2 { font-size: 16px; margin-bottom: 6px; }
+.bulk-row { align-items: flex-start; }
+.bulk-row label { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.bulk-row input[type="date"], .template-row input { max-width: 100%; }
+.status-ok { color: var(--ok); }
+.status-bad { color: var(--danger); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
 .topbar {
   position: sticky;
   top: 0;
@@ -652,7 +690,8 @@ input[type=range]::-moz-range-thumb {
 .confirm-card { width: min(420px, 100%); background: #161c2e; border: 1px solid var(--line); border-radius: 20px; padding: 20px; }
 .confirm-card h3 { font-size: 18px; margin-bottom: 8px; }
 .confirm-card p { color: var(--text-dim); line-height: 1.6; margin-bottom: 16px; }
-.confirm-actions { display: flex; gap: 8px; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm-actions .save-btn, .confirm-actions .cancel-btn { flex: 1 1 140px; }
 .confirm-actions .save-btn.danger { background: #E23B4A; }
 #confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 85; }
 .ptr {
@@ -672,6 +711,7 @@ input[type=range]::-moz-range-thumb {
 
 @media (max-width: 1023px) {
   .rider-list { padding-bottom: 92px; }
+  .content { padding-bottom: calc(var(--nav-h) + 108px); }
 }
 @media (min-width: 1024px) {
   body { padding-bottom: 24px; }

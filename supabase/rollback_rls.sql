@@ -6,6 +6,7 @@
 
 drop trigger if exists riders_lock_privileged_columns on public.riders;
 drop trigger if exists registrations_stamp_line_id on public.registrations;
+drop trigger if exists registrations_check_group on public.registrations;
 
 drop view if exists public.attendances_directory;
 drop view if exists public.registrations_directory;
@@ -29,7 +30,14 @@ drop policy if exists registrations_update on public.registrations;
 drop policy if exists registrations_delete on public.registrations;
 drop policy if exists attendances_select on public.attendances;
 drop policy if exists attendances_write on public.attendances;
+drop policy if exists routes_select on public.routes;
+drop policy if exists routes_write on public.routes;
+drop policy if exists ride_groups_select on public.ride_groups;
+drop policy if exists ride_groups_write on public.ride_groups;
+drop policy if exists ride_templates_all on public.ride_templates;
+drop policy if exists ride_template_groups_all on public.ride_template_groups;
 
+drop function if exists private.registrations_check_group();
 drop function if exists private.registrations_stamp_line_id();
 drop function if exists private.riders_lock_privileged_columns();
 drop function if exists private.is_self(text);

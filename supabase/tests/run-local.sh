@@ -51,6 +51,8 @@ SQL
 
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261104164830_baseline_schema.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261104164831_rls_lockdown.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261106170000_participation.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261106170000_participation.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
@@ -75,6 +77,9 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:54321/"; then
   cat "$RUNTIME/postgrest.log" >&2
   exit 1
 fi
+
+echo "== pace core =="
+node --test "$ROOT/tests/pace-core.test.mjs"
 
 echo "== deno unit =="
 deno test --allow-env "$ROOT/supabase/functions/line-auth/handler_test.ts"
