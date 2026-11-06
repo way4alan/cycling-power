@@ -25,6 +25,7 @@
 <div id="pending-screen" class="pending-screen" hidden></div>
 
 <div id="app" hidden>
+  <p id="demo-banner" class="demo-banner" hidden>示範資料，不會寫入正式車隊，也不會送出 LINE 訊息。</p>
   <aside class="side-nav" aria-label="主選單">
     <picture class="logo-slot side-logo">
       <source srcset="assets/pace-wordmark.webp" type="image/webp">
@@ -70,6 +71,7 @@
 
       <main class="content" id="content">
         <div id="tab-leaderboard" class="tab-panel active">
+          <section id="next-ride" class="next-ride" aria-live="polite"></section>
           <div class="lb-grid">
             <div class="lb-primary">
               <div class="cat-filters" id="cat-filters">
@@ -93,7 +95,10 @@
                   <div class="metric-val"><span id="member-count">—</span><span class="unit">人</span></div>
                 </div>
               </div>
-              <div id="podium" class="podium"></div>
+              <div id="podium-block">
+                <p id="podium-rule" class="rule-note"></p>
+                <div id="podium" class="podium"></div>
+              </div>
               <div id="me-dock" class="me-dock" hidden></div>
             </div>
             <div class="lb-secondary">
@@ -108,6 +113,7 @@
                 </div>
               </div>
               <div id="rider-list" class="rider-list"></div>
+              <section id="monthly-board" class="monthly-board"></section>
             </div>
           </div>
         </div>
@@ -171,8 +177,22 @@
             <div class="form-row"><label for="ride-max">人數上限（選填）</label><input type="number" id="ride-max" placeholder="例如：20"></div>
             <div class="form-row"><label for="ride-strava">Strava 路線連結（選填）</label><input type="text" id="ride-strava" placeholder="https://www.strava.com/routes/..."></div>
             <div class="form-row"><label for="ride-garmin-url">Garmin 路線連結（選填）</label><input type="text" id="ride-garmin-url" placeholder="https://connect.garmin.com/..."></div>
-            <div class="form-row"><label for="ride-garmin">Garmin Code（選填）</label><input type="text" id="ride-garmin" placeholder="例如：AB1234"></div>
+            <div class="form-row">
+              <label for="ride-garmin">這一場的 GroupRide 代碼（選填，可稍後再補）</label>
+              <p class="field-help">必須是這一場新建立的代碼。從舊團騎或範本帶入時不會複製舊代碼。車錶上的 GroupRide 仍請手動建立。</p>
+              <input type="text" id="ride-garmin" placeholder="例如：AB1234">
+            </div>
             <div class="form-row"><label for="ride-note">備註（選填）</label><input type="text" id="ride-note" placeholder="例如：記得帶補給"></div>
+            <div id="ride-extra" hidden>
+              <div class="form-row"><label for="ride-pace">配速說明（選填，文字描述，不依 FTP 自動分組）</label><input type="text" id="ride-pace" placeholder="例如：分兩組，各組自己騎"></div>
+              <div class="form-grid">
+                <div class="form-row"><label for="ride-distance">距離 km（選填）</label><input type="number" id="ride-distance" min="0" step="0.1"></div>
+                <div class="form-row"><label for="ride-ascent">爬升 m（選填）</label><input type="number" id="ride-ascent" min="0" step="1"></div>
+              </div>
+              <label class="check-line"><input type="checkbox" id="ride-estimated"> 距離或爬升是估算</label>
+              <div class="form-row"><label for="ride-route">路線庫（選填）</label><select id="ride-route"><option value="">不套用路線</option></select></div>
+              <div class="form-row"><label for="ride-groups">騎乘組別（選填，一行一組：組名｜配速說明）</label><textarea id="ride-groups" rows="3" placeholder="A 組｜有人輪帶&#10;B 組｜輕鬆聊天"></textarea></div>
+            </div>
             <div class="form-row">
               <label for="ride-weather-location">天氣預報地點（選填）</label>
               <select id="ride-weather-location" onchange="handleWeatherLocationChange()"><option value="">使用第一集合點天氣</option></select>
@@ -252,6 +272,8 @@
             <button class="admin-tab" type="button" data-act="admin-tab" data-tab="active">已核准</button>
             <button class="admin-tab" type="button" data-act="admin-tab" data-tab="locations">集合地點</button>
             <button class="admin-tab" type="button" data-act="admin-tab" data-tab="guidelines">團規管理</button>
+            <button class="admin-tab" type="button" data-act="admin-tab" data-tab="studio">複製 / 範本</button>
+            <button class="admin-tab" type="button" data-act="admin-tab" data-tab="routes">路線庫</button>
           </div>
           <div id="admin-pending" class="admin-panel active"></div>
           <div id="admin-active" class="admin-panel"></div>
@@ -271,6 +293,8 @@
             </div>
             <div id="guideline-admin-list"></div>
           </div>
+          <div id="admin-studio" class="admin-panel"></div>
+          <div id="admin-routes" class="admin-panel"></div>
         </div>
       </main>
     </div>
@@ -295,6 +319,18 @@
   </nav>
 </div>
 
+<div id="announce" class="confirm" hidden>
+  <div class="confirm-card announce-card" role="dialog" aria-modal="true" aria-labelledby="announce-title">
+    <h3 id="announce-title">公告預覽</h3>
+    <p class="field-help">下面就是會分享的內容。按下分享後才會出現 LINE 選單，由你選擇對象並確認。取消或無法使用時不會送出。</p>
+    <pre id="announce-text" class="announce-text"></pre>
+    <div class="confirm-actions">
+      <button class="save-btn" id="announce-share" type="button" data-act="announce-share">用 LINE 選擇對象</button>
+      <button class="cancel-btn" id="announce-copy" type="button" data-act="announce-copy">只複製，不送出</button>
+      <button class="cancel-btn" id="announce-close" type="button" data-act="announce-close">關閉</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div id="confirm" class="confirm" hidden>
   <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -307,6 +343,7 @@
   </div>
 </div>
 <canvas id="confetti"></canvas>
+<script src="lib/pace-core.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 </body>

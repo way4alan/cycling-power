@@ -6,7 +6,7 @@ const CACHE_TTL = 30 * 60 * 1000
 const WKG_SCALE = 5.5
 const TAB_ORDER = ['leaderboard', 'match', 'pace', 'ride', 'profile']
 const PAGES = {
-  leaderboard: ['戰力排行榜', '沛速車隊 · W/KG RANKING'],
+  leaderboard: ['沛速車隊', '下一場團騎 · 戰力排行'],
   match: ['配對對手', '沛速車隊 · MATCH'],
   pace: ['PACE', '沛速車隊 · RHYTHM'],
   ride: ['團騎公告', '沛速車隊 · GROUP RIDES'],
@@ -58,6 +58,16 @@ let lineSession = null
 let lineSessionPromise = null
 let lineRefreshTimer = 0
 let myRegByRide = new Map()
+let schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false }
+let rideState = { rides: [], regs: [], groups: [], atts: [], routes: [], templates: [], templateGroups: [] }
+let rankingCtx = { rides: [], attendances: [], error: null }
+let publishLock = false
+let announceFlex = null
+let announceRideId = ''
+let appliedTemplateId = ''
+let studioDraft = null
+let studioSource = null
+let routeParse = null
 const countState = new Map()
 const memCache = new Map()
 
@@ -404,6 +414,568 @@ function playFlip(prev) {
     )
   })
 }
+function regIsMine(reg) {
+  if (!reg || !myProfile) return false
+  if (reg.line_user_id && reg.line_user_id === myProfile.line_user_id) return true
+  return !!(myData && reg.rider_id && reg.rider_id === myData.id)
+}
+function insertedId(res) {
+  if (!res || res.error) return ''
+  if (Array.isArray(res.data)) return (res.data[0] && res.data[0].id) || ''
+  return (res.data && res.data.id) || ''
+}
+function parseGroupLines(text) {
+  return String(text || '').split('\n').map(line => line.trim()).filter(Boolean).map((line, i) => {
+    const parts = line.split('｜')
+    return { name: parts[0].trim(), pace_note: parts.slice(1).join('｜').trim(), sort_order: i }
+  }).filter(g => g.name)
+}
+async function probeSchema() {
+  schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false }
+  if (DEMO) {
+    schemaCaps = { groups: true, templates: true, routes: true, rideExtras: true, regGroup: true }
+    return
+  }
+  const checks = [
+    ['groups', 'ride_groups', 'id'],
+    ['templates', 'ride_templates', 'id'],
+    ['routes', 'routes', 'id'],
+    ['rideExtras', 'rides', 'cancelled'],
+    ['regGroup', 'registrations_directory', 'group_id']
+  ]
+  await Promise.all(checks.map(async ([key, table, col]) => {
+    const res = await db.from(table).select(col).limit(1)
+    schemaCaps[key] = !res.error
+  }))
+}
+async function loadRideState() {
+  const ridesRes = await db.from('rides').select('*').order('date', { ascending: false })
+  rideState.rides = ridesRes.data || []
+  rideState.ridesError = ridesRes.error || null
+  const atts = await readFrom('attendances').select('*')
+  rideState.atts = atts.data || []
+  rideState.attsError = atts.error || null
+  const regs = await readFrom('registrations').select('*')
+  rideState.regs = regs.error ? [] : (regs.data || [])
+  myRegByRide = new Map(rideState.regs.filter(regIsMine).filter(reg => reg.ride_id).map(reg => [reg.ride_id, reg]))
+  rideState.groups = []
+  if (schemaCaps.groups) {
+    const groups = await db.from('ride_groups').select('*').order('sort_order')
+    if (groups.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(groups.error)) schemaCaps.groups = false
+    else if (!groups.error) rideState.groups = groups.data || []
+  }
+  rideState.routes = []
+  if (schemaCaps.routes) {
+    const routes = await db.from('routes').select('*').order('title')
+    if (routes.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(routes.error)) schemaCaps.routes = false
+    else if (!routes.error) rideState.routes = routes.data || []
+  }
+  rideState.templates = []
+  rideState.templateGroups = []
+  if (schemaCaps.templates && isAdmin) {
+    const templates = await db.from('ride_templates').select('*').order('title')
+    if (templates.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(templates.error)) schemaCaps.templates = false
+    else if (!templates.error) {
+      rideState.templates = templates.data || []
+      const groups = await db.from('ride_template_groups').select('*').order('sort_order')
+      rideState.templateGroups = groups.data || []
+    }
+  }
+  const extra = document.getElementById('ride-extra')
+  if (extra) extra.hidden = !schemaCaps.rideExtras
+  fillRouteSelect()
+}
+async function loadRankingContext() {
+  rankingCtx = {
+    rides: (rideState.rides || []).map(r => ({
+      id: r.id,
+      date: r.date,
+      is_finished: r.is_finished === true,
+      cancelled: r.cancelled === true
+    })),
+    attendances: rideState.atts || [],
+    error: rideState.ridesError || rideState.attsError || null
+  }
+}
+function fillRouteSelect() {
+  const sel = document.getElementById('ride-route')
+  if (!sel) return
+  const current = sel.value
+  sel.innerHTML = '<option value="">不套用路線</option>' + (rideState.routes || []).map(route => `<option value="${esc(route.id)}">${esc(route.title)}</option>`).join('')
+  if (current) sel.value = current
+}
+function renderNextRide() {
+  const host = document.getElementById('next-ride')
+  if (!host || !globalThis.PaceCore) return
+  const ride = PaceCore.nextUpcoming(rideState.rides || [], Date.now())
+  if (!ride) {
+    host.innerHTML = '<div class="card empty-state">目前沒有即將出發的團騎</div>'
+    return
+  }
+  const regs = (rideState.regs || []).filter(reg => reg.ride_id === ride.id)
+  host.innerHTML = rideCardHtml(ride, {
+    regs,
+    mine: myRegByRide.has(ride.id),
+    myReg: myRegByRide.get(ride.id),
+    squads: (rideState.groups || []).filter(g => g.ride_id === ride.id),
+    weather: null,
+    aqi: null,
+    group: '',
+    domId: 'hero-' + ride.id
+  })
+}
+function renderMonthly(today) {
+  const host = document.getElementById('monthly-board')
+  if (!host || !globalThis.PaceCore) return
+  if (rankingCtx.error) {
+    host.innerHTML = '<h2>本月出席</h2><div class="empty-state">出席紀錄暫時讀不到，不列入名次。</div>'
+    return
+  }
+  const board = PaceCore.monthlyBoard({
+    today: today || PaceCore.taipeiDate(new Date()),
+    riders: allRiders,
+    rides: rankingCtx.rides,
+    attendances: rankingCtx.attendances
+  })
+  const rows = board.rows.length ? board.rows.map(row => `<div class="monthly-row"><span>#${row.rank}</span><b>${esc(row.name)}</b><span>${row.count} 次</span></div>`).join('') : '<div class="empty-state">這個月還沒有已結束的出席</div>'
+  host.innerHTML = `<h2>本月出席</h2><p>${esc(board.rule)}</p>${rows}`
+}
+function pastRides() {
+  const today = PaceCore.taipeiDate(new Date())
+  return (rideState.rides || []).filter(r => r.date && r.date <= today)
+}
+function renderStudio() {
+  const host = document.getElementById('admin-studio')
+  if (!host || !isAdmin) return
+  if (!schemaCaps.templates && !schemaCaps.rideExtras && !DEMO) {
+    host.innerHTML = '<div class="empty-state">資料庫還沒有範本與複製欄位。請先執行 migration，現有團騎仍可使用。</div>'
+    return
+  }
+  const options = pastRides().map(r => `<option value="${esc(r.id)}">${esc(r.date)} ${esc(r.title)}</option>`).join('')
+  const bulk = pastRides().map(r => `<div class="bulk-row"><label><input type="checkbox" data-bulk="${esc(r.id)}"><span>${esc(r.date)} ${esc(r.title)}</span></label><input type="date" data-bulk-date="${esc(r.id)}" aria-label="新日期"></div>`).join('')
+  host.innerHTML = `<section class="card studio-card">
+      <h2>從過去的團騎建立新的一場</h2>
+      <p class="studio-note">會帶入標題、集合點、時間、Garmin 路線連結和備註。不會帶入報名、出席、舊的 GroupRide 代碼、舊日期或已結束／已取消狀態。選取範本或舊團騎都還不會發布。</p>
+      <div class="form-row"><label for="copy-source">過去的團騎</label><select id="copy-source"><option value="">請選擇</option>${options}</select></div>
+      <div class="form-row"><label for="copy-date">新的日期</label><input type="date" id="copy-date"></div>
+      <div class="form-row"><label for="copy-code">這一場的 GroupRide 代碼（選填）</label>
+        <p class="field-help">必須是這一場新建立的代碼，可以晚點再補。舊代碼不會帶過來。</p>
+        <input type="text" id="copy-code" placeholder="留白代表這場還沒有代碼">
+      </div>
+      <pre id="copy-draft" class="announce-text">尚未帶入。</pre>
+      <div class="btn-row">
+        <button class="cancel-btn" type="button" data-act="copy-preview">預覽，先不發布</button>
+        <button class="save-btn" type="button" data-act="copy-publish">發布這一場</button>
+        <button class="cancel-btn" type="button" data-act="save-template">存成範本，不發布</button>
+      </div>
+      <pre id="copy-preview" class="announce-text"></pre>
+    </section>
+    <section class="card studio-card">
+      <h2>範本</h2>
+      <div class="form-row"><label for="template-search">搜尋</label><input type="search" id="template-search" placeholder="標題或集合點"></div>
+      <div id="template-list"></div>
+    </section>
+    <section class="card studio-card">
+      <h2>一次選好幾場</h2>
+      <p class="studio-note">每一場各自填新日期。先看預覽，再按確認發布。缺日期的不會建立，已建立的不會因為其他筆失敗而被悄悄多複製一次。</p>
+      ${bulk || '<div class="empty-state">還沒有過去的團騎</div>'}
+      <div class="btn-row">
+        <button class="cancel-btn" type="button" data-act="bulk-preview">預覽整批，先不發布</button>
+        <button class="save-btn" type="button" data-act="bulk-publish">確認發布</button>
+      </div>
+      <div id="bulk-results"></div>
+    </section>
+    <div id="publish-results"></div>`
+  const search = document.getElementById('template-search')
+  if (search) search.addEventListener('input', () => renderTemplateList(search.value))
+  renderTemplateList('')
+  const source = document.getElementById('copy-source')
+  if (source) source.addEventListener('change', () => { if (source.value) stagePastRide(source.value) })
+}
+function renderTemplateList(query) {
+  const host = document.getElementById('template-list')
+  if (!host) return
+  const q = String(query || '').trim().toLowerCase()
+  const rows = (rideState.templates || []).filter(t => !q || (t.title + ' ' + (t.location || '')).toLowerCase().includes(q))
+  host.innerHTML = rows.length ? rows.map(t => `<div class="template-row"><div><b>${esc(t.title)}</b><div class="field-help">${esc(t.time || '')} ${esc(t.location || '')}</div></div><button class="edit-btn" type="button" data-act="use-template" data-id="${esc(t.id)}">帶入，不發布</button></div>`).join('') : '<div class="empty-state">沒有符合的範本</div>'
+}
+function stagePastRide(id) {
+  const ride = (rideState.rides || []).find(r => r.id === id)
+  if (!ride) return
+  studioDraft = PaceCore.rideDraftFromSource(ride, (rideState.groups || []).filter(g => g.ride_id === id))
+  studioSource = { kind: 'ride', id }
+  appliedTemplateId = ''
+  const draft = document.getElementById('copy-draft')
+  if (draft) draft.textContent = '已帶入「' + ride.title + '」。舊的 GroupRide 代碼、報名和出席都不會帶過去。尚未發布。'
+  const code = document.getElementById('copy-code')
+  if (code) code.value = ''
+  const date = document.getElementById('copy-date')
+  if (date) date.value = ''
+}
+function stageTemplate(id) {
+  const template = (rideState.templates || []).find(t => t.id === id)
+  if (!template) return
+  const applied = PaceCore.applyTemplate(template, (rideState.templateGroups || []).filter(g => g.template_id === id))
+  if (applied.published || applied.persisted) return
+  studioDraft = applied.draft
+  studioSource = { kind: 'template', id }
+  appliedTemplateId = id
+  const source = document.getElementById('copy-source')
+  if (source) source.value = ''
+  const code = document.getElementById('copy-code')
+  if (code) code.value = ''
+  const date = document.getElementById('copy-date')
+  if (date) date.value = ''
+  const draft = document.getElementById('copy-draft')
+  if (draft) draft.textContent = '已帶入範本「' + template.title + '」，尚未發布。請填新日期後才按發布。'
+}
+function studioItem() {
+  if (!studioDraft || !studioSource) return null
+  return {
+    key: studioSource.id,
+    sourceKind: studioSource.kind,
+    sourceId: studioSource.id,
+    date: (document.getElementById('copy-date') || {}).value || '',
+    garminCode: (document.getElementById('copy-code') || {}).value || '',
+    draft: studioDraft
+  }
+}
+function previewStudio() {
+  const item = studioItem()
+  const host = document.getElementById('copy-preview')
+  if (!item) { if (host) host.textContent = '請先選擇過去的團騎或範本。尚未發布。'; return }
+  const view = PaceCore.previewCopies([item]).items[0]
+  if (!host) return
+  if (view.blockers.length) {
+    host.textContent = '尚未發布。' + view.blockers.join('、')
+    return
+  }
+  host.textContent = [
+    '預覽，尚未發布',
+    '標題：' + view.payload.title,
+    '新日期：' + view.payload.date,
+    '集合：' + view.payload.time + ' ' + view.payload.location,
+    '路線：' + (view.payload.garmin_url || '（沒有）'),
+    '備註：' + (view.payload.note || '（沒有）'),
+    'GroupRide 代碼：' + (view.payload.garmin_code || '（這場還沒有，不會沿用舊代碼）'),
+    '報名 0 人，出席 0 人',
+    '新編號會由資料庫產生；狀態是未結束、未取消'
+  ].join('\n')
+}
+async function insertCopiedRide(item) {
+  const payload = Object.assign({}, item.payload)
+  if (!schemaCaps.rideExtras) ['pace_note', 'distance_km', 'ascent_m', 'distance_estimated', 'ascent_estimated', 'route_id', 'cancelled', 'source_key'].forEach(key => { delete payload[key] })
+  const res = await db.from('rides').insert(payload).select('id')
+  if (res.error) {
+    const duplicate = res.error.code === '23505' || /duplicate|source_key/i.test(res.error.message || '')
+    return { error: true, duplicate, code: res.error.code }
+  }
+  const id = insertedId(res)
+  if (schemaCaps.groups && id && item.groups && item.groups.length) {
+    const rows = item.groups.map(g => ({ ride_id: id, name: g.name, pace_note: g.pace_note || '', sort_order: g.sort_order || 0 }))
+    const saved = await db.from('ride_groups').insert(rows)
+    if (saved.error) return { id, error: true }
+  }
+  return { id }
+}
+function publishStatusText(result) {
+  const label = { published: '已建立', blocked: '未建立', duplicate: '已存在，沒有再建立一筆', failed: '失敗', skipped: '未送出' }
+  return (result.results || []).map(row => {
+    const why = row.blockers && row.blockers.length ? '：' + row.blockers.join('、') : ''
+    return (label[row.status] || row.status) + why
+  }).join('\n')
+}
+async function publishStudio() {
+  const item = studioItem()
+  const host = document.getElementById('publish-results')
+  if (!item) { if (host) host.textContent = '沒有可發布的內容'; return }
+  if (publishLock) { showToast('正在發布，請不要連按'); return }
+  publishLock = true
+  try {
+    const result = await PaceCore.publishCopies([item], insertCopiedRide)
+    await loadRideState()
+    await loadRankingContext()
+    renderLeaderboard()
+    await renderRides()
+    renderStudio()
+    const refreshed = document.getElementById('copy-preview')
+    if (refreshed) refreshed.textContent = publishStatusText(result)
+    const published = (result.results || []).find(row => row.status === 'published')
+    if (published && published.id) openAnnouncement(published.id)
+  } finally {
+    publishLock = false
+  }
+}
+function collectBulk() {
+  return Array.from(document.querySelectorAll('[data-bulk]:checked')).map(box => {
+    const ride = (rideState.rides || []).find(r => r.id === box.value)
+    return {
+      key: (ride && ride.title) || box.value,
+      sourceKind: 'ride',
+      sourceId: box.value,
+      date: (document.querySelector('[data-bulk-date="' + box.value + '"]') || {}).value || '',
+      garminCode: '',
+      draft: PaceCore.rideDraftFromSource(ride, (rideState.groups || []).filter(g => g.ride_id === box.value))
+    }
+  })
+}
+async function previewBulk() {
+  const items = collectBulk()
+  const host = document.getElementById('bulk-results')
+  if (!items.length) { if (host) host.textContent = '請先勾選團騎。尚未發布。'; return }
+  const preview = PaceCore.previewCopies(items)
+  if (host) host.textContent = '預覽，尚未發布\n' + preview.items.map(item => {
+    if (item.blockers.length) return item.key + '：未建立（' + item.blockers.join('、') + '）'
+    return item.key + ' → ' + item.payload.date + '，代碼「' + (item.payload.garmin_code || '無') + '」，人數 0'
+  }).join('\n')
+}
+async function publishBulk() {
+  const items = collectBulk()
+  const host = document.getElementById('bulk-results')
+  if (!items.length) { if (host) host.textContent = '請先勾選團騎'; return }
+  if (publishLock) { showToast('正在發布，請不要連按'); return }
+  publishLock = true
+  try {
+    const result = await PaceCore.publishCopies(items, insertCopiedRide)
+    if (host) host.textContent = publishStatusText(result)
+    await loadRideState()
+    await loadRankingContext()
+    renderLeaderboard()
+    await renderRides()
+  } finally {
+    publishLock = false
+  }
+}
+async function saveTemplateFromStudio() {
+  if (!studioDraft || !studioDraft.title) { showToast('先帶入內容。這不會發布團騎'); return }
+  if (!schemaCaps.templates) { showToast('資料庫還沒有範本表'); return }
+  const row = {
+    title: studioDraft.title,
+    time: studioDraft.time || '',
+    time2: studioDraft.time2 || '',
+    location: studioDraft.location || '',
+    location2: studioDraft.location2 || '',
+    note: studioDraft.note || '',
+    strava_url: studioDraft.strava_url || '',
+    garmin_url: studioDraft.garmin_url || '',
+    pace_note: studioDraft.pace_note || '',
+    distance_km: studioDraft.distance_km,
+    ascent_m: studioDraft.ascent_m,
+    distance_estimated: studioDraft.distance_estimated === true,
+    ascent_estimated: studioDraft.ascent_estimated === true,
+    route_id: studioDraft.route_id || null,
+    max_participants: studioDraft.max_participants,
+    weather_lat: studioDraft.weather_lat,
+    weather_lng: studioDraft.weather_lng,
+    weather_location_name: studioDraft.weather_location_name || ''
+  }
+  const res = await db.from('ride_templates').insert(row).select('id')
+  if (res.error) { showToast('範本沒有存起來'); return }
+  const id = insertedId(res)
+  if (id && studioDraft.groups && studioDraft.groups.length) {
+    await db.from('ride_template_groups').insert(studioDraft.groups.map(g => ({
+      template_id: id, name: g.name, pace_note: g.pace_note || '', sort_order: g.sort_order || 0
+    })))
+  }
+  showToast('已存成範本，沒有發布團騎')
+  await loadRideState()
+  renderStudio()
+}
+function routeResultHtml(parsed) {
+  if (!parsed || !parsed.ok) return `<p class="status-bad">${esc((parsed && parsed.message) || '無法讀取這份 GPX')}</p>`
+  const ascent = parsed.ascentM == null ? '無法估算爬升（沒有高度）' : parsed.ascentM + ' m（估算）'
+  return `${PaceCore.trackSvg(parsed.points)}<p>距離 ${esc(String(parsed.distanceKm))} km（估算） · 爬升 ${esc(ascent)}</p><p class="field-help">${esc(parsed.message)} 預覽只用 GPX 座標畫線，沒有街道底圖，也不會連到 Garmin 或付費地圖。</p>`
+}
+function renderRouteAdmin() {
+  const host = document.getElementById('admin-routes')
+  if (!host || !isAdmin) return
+  if (!schemaCaps.routes && !DEMO) {
+    host.innerHTML = '<div class="empty-state">資料庫還沒有路線庫。請先執行 migration。</div>'
+    return
+  }
+  const sample = DEMO && globalThis.PaceCore ? routeResultHtml(PaceCore.parseGpx(DEMO_GPX)) : ''
+  const list = (rideState.routes || []).map(route => `<article class="card route-card"><h2>${esc(route.title)}</h2><p class="field-help">${route.garmin_course_id ? 'Garmin 路線編號 ' + esc(route.garmin_course_id) : '沒有 Garmin 路線編號'}</p>${route.original_url ? `<p class="field-help">${esc(route.original_url)}</p>` : ''}${PaceCore.trackSvg(route.track || [])}<p>距離 ${route.distance_km == null ? '未填' : esc(String(route.distance_km)) + (route.distance_estimated ? ' km（估算）' : ' km')} · 爬升 ${route.ascent_m == null ? '未填' : esc(String(route.ascent_m)) + (route.ascent_estimated ? ' m（估算）' : ' m')}</p><p>${esc(route.notes || '')}</p></article>`).join('')
+  host.innerHTML = `<section class="card route-card">
+      <h2>路線庫</h2>
+      <p class="studio-note">路線跟某一場團騎分開存。日期和 GroupRide 代碼不會寫進路線。相同的 Garmin 路線編號會更新同一筆。</p>
+      <div class="form-row"><label for="route-title">路線名稱</label><input id="route-title" type="text"></div>
+      <div class="form-row"><label for="route-url">公開的 Garmin 路線連結</label><input id="route-url" type="url" placeholder="https://connect.garmin.com/modern/course/..."></div>
+      <p id="route-url-note" class="field-help"></p>
+      <div class="form-row"><label for="route-notes">備註</label><textarea id="route-notes" rows="3"></textarea></div>
+      <div class="form-grid">
+        <div class="form-row"><label for="route-distance">距離 km</label><input id="route-distance" type="number" min="0" step="0.1"></div>
+        <div class="form-row"><label for="route-ascent">爬升 m</label><input id="route-ascent" type="number" min="0" step="1"></div>
+      </div>
+      <div class="form-row"><label for="route-gpx">本機 GPX</label><input id="route-gpx" type="file" accept=".gpx,application/gpx+xml,text/xml"></div>
+      <div id="gpx-result">${sample}</div>
+      <button class="save-btn" type="button" data-act="save-route">儲存路線</button>
+    </section>${list}`
+  const file = document.getElementById('route-gpx')
+  if (file) file.addEventListener('change', () => readGpxFile(file.files && file.files[0]))
+  const url = document.getElementById('route-url')
+  if (url) url.addEventListener('change', () => noteGarminUrl(url.value))
+  ;['route-distance', 'route-ascent'].forEach(id => {
+    const input = document.getElementById(id)
+    if (input) input.addEventListener('input', () => { input.dataset.edited = '1' })
+  })
+}
+function noteGarminUrl(value) {
+  const note = document.getElementById('route-url-note')
+  if (!note || !globalThis.PaceCore) return
+  const norm = PaceCore.normalizeGarminUrl(value)
+  if (!value.trim()) { note.textContent = ''; return }
+  if (!norm.ok) { note.textContent = '這個連結不能用。只接受沒有帳號密碼的 http 或 https。'; return }
+  const known = norm.courseId ? PaceCore.findRouteByCourseId(rideState.routes || [], norm.courseId) : null
+  note.textContent = known
+    ? '路線庫已有同一條 Garmin 路線「' + known.title + '」。儲存時會更新那一筆，不會另建。'
+    : (norm.courseId ? '辨識到路線編號 ' + norm.courseId + '。' : '這是可用的連結，但不是支援的 Garmin 路線網址，不會當成同一條路線。')
+}
+async function readGpxFile(file) {
+  const host = document.getElementById('gpx-result')
+  if (!file) return
+  if (file.size > 1500000) {
+    routeParse = { ok: false, message: 'GPX 超過大小上限，沒有讀取' }
+    if (host) host.innerHTML = routeResultHtml(routeParse)
+    return
+  }
+  const text = await file.text()
+  routeParse = PaceCore.parseGpx(text)
+  if (host) host.innerHTML = routeResultHtml(routeParse)
+  if (routeParse.ok) {
+    const distance = document.getElementById('route-distance')
+    const ascent = document.getElementById('route-ascent')
+    if (distance && distance.dataset.edited !== '1') distance.value = String(routeParse.distanceKm)
+    if (ascent && ascent.dataset.edited !== '1' && routeParse.ascentM != null) ascent.value = String(routeParse.ascentM)
+  }
+}
+async function saveRoute() {
+  const title = (document.getElementById('route-title').value || '').trim()
+  if (!title) { showToast('請填路線名稱'); return }
+  const norm = PaceCore.normalizeGarminUrl(document.getElementById('route-url').value)
+  if (document.getElementById('route-url').value.trim() && !norm.ok) { showToast('路線連結不能用'); return }
+  const distanceInput = document.getElementById('route-distance')
+  const ascentInput = document.getElementById('route-ascent')
+  const distance = distanceInput.value === '' ? null : Number(distanceInput.value)
+  const ascent = ascentInput.value === '' ? null : Number(ascentInput.value)
+  const parsed = routeParse && routeParse.ok ? routeParse : null
+  const row = {
+    title,
+    garmin_course_id: norm.courseId || null,
+    garmin_url: norm.canonical || norm.original || '',
+    original_url: norm.original || '',
+    distance_km: distance,
+    ascent_m: ascent,
+    distance_estimated: distance != null && distanceInput.dataset.edited !== '1' && !!parsed,
+    ascent_estimated: ascent != null && ascentInput.dataset.edited !== '1' && !!(parsed && parsed.ascentM != null),
+    notes: document.getElementById('route-notes').value.trim(),
+    track: parsed ? parsed.points : [],
+    point_count: parsed ? parsed.pointCount : 0,
+    updated_at: new Date().toISOString()
+  }
+  const existing = norm.courseId ? PaceCore.findRouteByCourseId(rideState.routes || [], norm.courseId) : null
+  const res = existing
+    ? await db.from('routes').update(row).eq('id', existing.id)
+    : await db.from('routes').insert(row)
+  if (res.error) { showToast('路線沒有存起來'); return }
+  showToast(existing ? '已更新同一條路線' : '已存進路線庫')
+  routeParse = null
+  await loadRideState()
+  renderRouteAdmin()
+}
+function currentAnnouncement() {
+  const ride = (rideState.rides || []).find(r => r.id === announceRideId)
+  if (!ride) return null
+  return PaceCore.buildAnnouncement(Object.assign({}, ride, {
+    groups: (rideState.groups || []).filter(g => g.ride_id === ride.id)
+  }), { liffId: LIFF_ID })
+}
+function openAnnouncement(rideId) {
+  announceRideId = rideId
+  const built = currentAnnouncement()
+  const dialog = document.getElementById('announce')
+  const text = document.getElementById('announce-text')
+  if (!built || !built.ok || !dialog || !text) { showToast('這一場的資料還不足以產生公告'); return }
+  announceFlex = built.flex
+  text.textContent = built.text
+  dialog.hidden = false
+}
+async function copyPlain(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
+  } catch (e) { return false }
+}
+async function shareCurrentAnnouncement() {
+  const built = currentAnnouncement()
+  if (!built || !built.ok) return
+  if (DEMO) { showToast('示範資料不會送出 LINE 訊息'); return }
+  const result = await PaceCore.runShare(typeof liff === 'undefined' ? null : liff, built.flex)
+  if (result.status === 'sent') { showToast('已送出'); return }
+  if (result.status === 'cancelled') { showToast('已取消，沒有送出'); return }
+  if (result.status === 'unavailable') {
+    const copied = await copyPlain(built.text)
+    showToast(copied ? '這個環境不能開啟 LINE 分享選單。公告已複製，尚未送出' : '無法開啟分享選單，也沒有送出')
+    return
+  }
+  showToast('沒有送出，請再試一次')
+}
+async function copyAnnouncementOnly() {
+  const built = currentAnnouncement()
+  if (!built || !built.ok) return
+  const copied = await copyPlain(built.text)
+  const status = PaceCore.copyResult()
+  showToast(copied && status.sent === false ? '已複製公告，尚未送出' : '複製失敗，沒有送出')
+}
+async function setRideCancelled(rideId, cancelled) {
+  if (!schemaCaps.rideExtras) { showToast('資料庫還沒有取消欄位'); return }
+  const res = await db.from('rides').update({ cancelled: cancelled }).eq('id', rideId)
+  if (res.error) { showToast('沒有改成取消'); return }
+  showToast(cancelled ? '已標記取消' : '已恢復這場')
+  await loadRideState()
+  await loadRankingContext()
+  renderLeaderboard()
+  await renderRides()
+}
+function openRequestedPanel() {
+  const open = params.get('open')
+  const rideParam = params.get('ride')
+  const safeRide = rideParam && /^[A-Za-z0-9_-]{1,80}$/.test(rideParam) ? rideParam : ''
+  if (safeRide && open !== 'announce' && open !== 'studio' && open !== 'route') {
+    switchTab('ride')
+    const node = document.getElementById('ride-' + safeRide)
+    if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
+  }
+  if (open === 'podium') {
+    const node = document.getElementById('podium-block')
+    if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
+  }
+  if (open === 'studio' && isAdmin) {
+    switchTab('admin')
+    switchAdminTab('studio')
+    renderStudio()
+  }
+  if (open === 'route' && isAdmin) {
+    switchTab('admin')
+    switchAdminTab('routes')
+    renderRouteAdmin()
+  }
+  if (open === 'announce') {
+    const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
+    const id = safeRide && (rideState.rides || []).some(r => r.id === safeRide) ? safeRide : fallback
+    if (id) openAnnouncement(id)
+  }
+}
 function bootChrome() {
   document.querySelectorAll('[data-icon]').forEach(el => {
     el.innerHTML = icon(el.dataset.icon, Number(el.dataset.size || 20))
@@ -526,9 +1098,19 @@ function nextSunday() {
   const delta = (7 - dt.getUTCDay()) % 7
   return shiftDate(today, delta === 0 ? 7 : delta)
 }
+const DEMO_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="pace-demo">
+  <trk><name>示範壽山</name><trkseg>
+    <trkpt lat="22.6300" lon="120.2800"><ele>10</ele></trkpt>
+    <trkpt lat="22.6400" lon="120.2800"><ele>40</ele></trkpt>
+    <trkpt lat="22.6500" lon="120.2800"><ele>35</ele></trkpt>
+    <trkpt lat="22.6600" lon="120.2850"><ele>80</ele></trkpt>
+  </trkseg></trk>
+</gpx>`
 function createDemoDb() {
   const sunday = nextSunday()
-  const past = shiftDate(sunday, -7)
+  const today = taipeiToday()
+  const day = (n) => shiftDate(today, n)
   const now = new Date().toISOString()
   const rider = (partial) => Object.assign({
     status: 'approved', z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, mood: '', tire_width: null,
@@ -561,38 +1143,101 @@ function createDemoDb() {
       { id: 'g2', category: '爬坡技巧', sort_order: 2, content: '上坡維持自己的節奏，不要在坡底硬跟。\n坐姿為主，站起來時先跟旁邊的人說一聲。' },
       { id: 'g3', category: '補給', sort_order: 3, content: '出發前吃完簡單碳水，騎乘中每小時補水。\n集合點不要臨時找早餐。' }
     ],
+    routes: [
+      {
+        id: 'route-demo', title: '示範：壽山短線', garmin_course_id: '123456789',
+        garmin_url: 'https://connect.garmin.com/modern/course/123456789',
+        original_url: 'https://connect.garmin.com/modern/course/123456789',
+        distance_km: 3.3, ascent_m: 70, distance_estimated: true, ascent_estimated: true,
+        notes: '示範資料。距離與爬升由本機 GPX 估算，不是從 Garmin 網頁抓取。',
+        track: [
+          { lat: 22.63, lon: 120.28, ele: 10 },
+          { lat: 22.64, lon: 120.28, ele: 40 },
+          { lat: 22.65, lon: 120.28, ele: 35 },
+          { lat: 22.66, lon: 120.285, ele: 80 }
+        ],
+        point_count: 4
+      }
+    ],
+    ride_templates: [
+      {
+        id: 'tpl-sunday', title: '週日晨騎', time: '06:00', time2: '',
+        location: '愛河之心｜高雄市苓雅區四維三路2號', location2: '',
+        note: '示範範本，選取後不會立刻發布', strava_url: '',
+        garmin_url: 'https://connect.garmin.com/modern/course/123456789',
+        pace_note: '分組自己騎，不依 FTP 自動分', distance_km: 42, ascent_m: 380,
+        distance_estimated: true, ascent_estimated: true, route_id: null,
+        max_participants: 20, weather_lat: 22.6273, weather_lng: 120.3014, weather_location_name: '高雄市區'
+      }
+    ],
+    ride_template_groups: [
+      { id: 'tg1', template_id: 'tpl-sunday', name: 'A 組', pace_note: '有人輪帶', sort_order: 0 },
+      { id: 'tg2', template_id: 'tpl-sunday', name: 'B 組', pace_note: '輕鬆聊天', sort_order: 1 }
+    ],
     rides: [
       {
         id: 'ride-next', title: '週日晨騎 壽山環線', date: sunday, time: '06:00', time2: '',
         location: '愛河之心｜高雄市苓雅區四維三路2號', location2: '',
-        garmin_code: 'AB1234', note: '', strava_url: 'https://www.strava.com/routes/pace-demo',
-        garmin_url: 'https://connect.garmin.com/modern/course/pace-demo',
+        garmin_code: '', note: '分組後各組自己騎', strava_url: '',
+        garmin_url: 'https://connect.garmin.com/modern/course/123456789',
+        pace_note: '不依 FTP 自動分組', distance_km: 42, ascent_m: 380,
+        distance_estimated: true, ascent_estimated: true, route_id: 'route-demo',
         deadline: null, max_participants: 20, weather_lat: 22.6273, weather_lng: 120.3014,
-        weather_location_name: '高雄市區', is_finished: false, created_at: now
+        weather_location_name: '高雄市區', is_finished: false, cancelled: false, created_at: now
       },
       {
-        id: 'ride-old', title: '旗津海岸往返', date: past, time: '06:10', time2: '06:40',
+        id: 'ride-old', title: '旗津海岸往返', date: day(-7), time: '06:10', time2: '06:40',
         location: '民族路全國電子｜高雄市三民區明誠一路836號',
         location2: '愛河之心｜高雄市苓雅區四維三路2號',
-        garmin_code: '', note: '收隊後一起吃早餐', strava_url: '', garmin_url: '',
+        garmin_code: 'OLD-DEMO', note: '收隊後一起吃早餐', strava_url: '', garmin_url: 'https://connect.garmin.com/modern/course/123456789',
+        pace_note: '', distance_km: null, ascent_m: null, distance_estimated: false, ascent_estimated: false,
         deadline: null, max_participants: null, weather_lat: null, weather_lng: null,
-        weather_location_name: '', is_finished: true, created_at: now
-      }
+        weather_location_name: '', is_finished: true, cancelled: false, created_at: now
+      },
+      { id: 'ride-a', title: '平日短騎 A', date: day(-5), time: '06:00', location: '愛河之心', garmin_code: 'KEEP-ON-OLD', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-b', title: '平日短騎 B', date: day(-4), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-c', title: '平日短騎 C', date: day(-2), time: '06:30', location: '愛河之心', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-oct', title: '十月晨騎', date: day(-20), time: '06:00', location: '壽山', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-win', title: '窗內舊騎', date: day(-40), time: '06:00', location: '旗津', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-out', title: '超過八週', date: day(-57), time: '06:00', location: '旗津', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
+      { id: 'ride-cancel', title: '改期取消', date: day(-1), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: true, cancelled: true, created_at: now },
+      { id: 'ride-future', title: '還沒騎', date: day(3), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now }
+    ],
+    ride_groups: [
+      { id: 'gA', ride_id: 'ride-next', name: 'A 組', pace_note: '有人輪帶，自己的節奏', sort_order: 0 },
+      { id: 'gB', ride_id: 'ride-next', name: 'B 組', pace_note: '輕鬆聊天，不追風', sort_order: 1 }
     ],
     registrations: [
-      { id: 'reg1', ride_id: 'ride-next', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
-      { id: 'reg2', ride_id: 'ride-next', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' },
-      { id: 'reg3', ride_id: 'ride-next', line_user_id: 'u-momo', name: 'Momo', avatar_url: '' },
-      { id: 'reg4', ride_id: 'ride-next', line_user_id: 'u-zhe', name: '阿哲', avatar_url: '' },
-      { id: 'reg5', ride_id: 'ride-next', line_user_id: 'u-bear', name: '大熊', avatar_url: '' },
-      { id: 'reg6', ride_id: 'ride-old', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
-      { id: 'reg7', ride_id: 'ride-old', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
-      { id: 'reg8', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' }
+      { id: 'reg1', ride_id: 'ride-next', line_user_id: 'u-lin', name: '小林', avatar_url: '', group_id: 'gA' },
+      { id: 'reg2', ride_id: 'ride-next', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '', group_id: 'gA' },
+      { id: 'reg3', ride_id: 'ride-next', line_user_id: 'u-momo', name: 'Momo', avatar_url: '', group_id: 'gB' },
+      { id: 'reg4', ride_id: 'ride-next', line_user_id: 'u-zhe', name: '阿哲', avatar_url: '', group_id: null },
+      { id: 'reg5', ride_id: 'ride-next', line_user_id: 'u-bear', name: '大熊', avatar_url: '', group_id: 'gB' },
+      { id: 'reg-me', ride_id: 'ride-next', line_user_id: 'demo-me', name: '阿揚', avatar_url: '', group_id: 'gA' },
+      { id: 'reg6', ride_id: 'ride-old', line_user_id: 'u-lin', name: '小林', avatar_url: '', group_id: null },
+      { id: 'reg7', ride_id: 'ride-old', line_user_id: 'demo-me', name: '阿揚', avatar_url: '', group_id: null },
+      { id: 'reg8', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '', group_id: null }
     ],
     attendances: [
-      { id: 'a1', ride_id: 'ride-old', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
-      { id: 'a2', ride_id: 'ride-old', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
-      { id: 'a3', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' }
+      { id: 'a-dup', ride_id: 'ride-a', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
+      { id: 'a-me1', ride_id: 'ride-a', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
+      { id: 'a-me2', ride_id: 'ride-c', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
+      { id: 'a-k1', ride_id: 'ride-oct', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' },
+      { id: 'a-k2', ride_id: 'ride-b', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' },
+      { id: 'a-z1', ride_id: 'ride-win', line_user_id: 'u-zhe', name: '阿哲', avatar_url: '' },
+      { id: 'a-z2', ride_id: 'ride-oct', line_user_id: 'u-zhe', name: '阿哲', avatar_url: '' },
+      { id: 'a-z3', ride_id: 'ride-a', line_user_id: 'u-zhe', name: '阿哲', avatar_url: '' },
+      { id: 'a-b1', ride_id: 'ride-a', line_user_id: 'u-bear', name: '大熊', avatar_url: '' },
+      { id: 'a-b2', ride_id: 'ride-b', line_user_id: 'u-bear', name: '大熊', avatar_url: '' },
+      { id: 'a-b3', ride_id: 'ride-c', line_user_id: 'u-bear', name: '大熊', avatar_url: '' },
+      { id: 'a-m1', ride_id: 'ride-b', line_user_id: 'u-momo', name: 'Momo', avatar_url: '' },
+      { id: 'a-hi1', ride_id: 'ride-cancel', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
+      { id: 'a-hi2', ride_id: 'ride-future', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
+      { id: 'a-hi3', ride_id: 'ride-out', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
+      { id: 'a-p1', ride_id: 'ride-a', line_user_id: 'u-new', name: '新人小陳', avatar_url: '' },
+      { id: 'a-old1', ride_id: 'ride-old', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
+      { id: 'a-old2', ride_id: 'ride-old', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
+      { id: 'a-old3', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' }
     ]
   }
   let seq = 1
@@ -628,10 +1273,17 @@ function createDemoDb() {
       return { data: out, error: null }
     }
     if (this.op === 'insert') {
-      const row = Object.assign({ id: 'new-' + (seq++) }, this.payload)
-      rows.push(row)
+      const list = Array.isArray(this.payload) ? this.payload : [this.payload]
+      if (list.some(item => item && item.source_key && rows.some(r => r.source_key === item.source_key))) {
+        return { data: null, error: { code: '23505', message: 'duplicate source_key' } }
+      }
+      const created = list.map(item => {
+        const row = Object.assign({ id: item.id || ('new-' + (seq++)) }, item)
+        rows.push(row)
+        return row
+      })
       store[this.table] = rows
-      return { data: row, error: null }
+      return { data: Array.isArray(this.payload) ? created : created[0], error: null }
     }
     if (this.op === 'update') {
       rows.forEach(r => { if (this.matchRow(r)) Object.assign(r, this.payload) })
@@ -678,26 +1330,40 @@ async function init() {
         }
       })
     }
-    const { data: me } = await readFrom('riders').select('*').eq('line_user_id', myProfile.line_user_id).single()
+    const lookup = await readFrom('riders').select('*').eq('line_user_id', myProfile.line_user_id).single()
+    const membership = (globalThis.PaceCore && PaceCore.interpretRiderLookup(lookup)) || { kind: lookup && lookup.error ? 'error' : (lookup && lookup.data ? 'member' : 'new') }
+    if (membership.kind === 'error') {
+      const el = document.querySelector('.loading-text')
+      if (el) el.textContent = '載入失敗，請重新整理'
+      return
+    }
+    const me = lookup.data
     myData = me
-    if (!me) { revealPending(false); return }
-    if (me.status === 'pending') { revealPending(true, me); return }
+    if (membership.kind === 'new') { revealPending(false); return }
+    if (membership.kind === 'pending') { revealPending(true, me); return }
     await updateLastSeen()
     isAdmin = me.is_admin === true
     document.getElementById('loading').hidden = true
     document.getElementById('app').hidden = false
+    const banner = document.getElementById('demo-banner')
+    if (banner) banner.hidden = !DEMO
+    await probeSchema()
     await loadLocations()
     await loadWeatherLocations()
     await loadRiders()
+    await loadRideState()
+    await loadRankingContext()
     renderLeaderboard()
+    renderNextRide()
     renderMatch()
     renderProfile()
     renderPace()
     if (isAdmin) renderAdmin()
-    renderRides()
+    await renderRides()
     syncChrome()
     const tab = params.get('tab')
     if (tab && document.getElementById('tab-' + tab)) switchTab(tab)
+    openRequestedPanel()
   } catch (e) {
     console.error(e)
     const el = document.querySelector('.loading-text')
@@ -851,14 +1517,27 @@ function renderLeaderboard() {
   tweenNumber(document.getElementById('avg-ftp'), avgFtp == null ? NaN : avgFtp, 0)
   tweenNumber(document.getElementById('avg-wkg'), avgW == null ? NaN : avgW, 2)
   tweenNumber(document.getElementById('member-count'), valid.length, 0)
-  const slots = [filtered[1], filtered[0], filtered[2]]
+  const today = globalThis.PaceCore ? PaceCore.taipeiDate(new Date()) : taipeiToday()
+  const podiumResult = globalThis.PaceCore ? PaceCore.podium({
+    today,
+    riders: filtered,
+    rides: rankingCtx.rides,
+    attendances: rankingCtx.attendances
+  }) : { top: [], counts: {}, rule: '', emptySlots: 3 }
+  const rule = document.getElementById('podium-rule')
+  if (rule) rule.textContent = rankingCtx.error ? '出席紀錄暫時讀不到，頒獎台先留空。下面的戰力排名仍依 W/kg，沒有遞補人選。' : (podiumResult.rule || '')
+  const slots = rankingCtx.error ? [null, null, null] : [podiumResult.top[1], podiumResult.top[0], podiumResult.top[2]]
   document.getElementById('podium').innerHTML = filtered.length ? slots.map((r, i) => {
     const place = [2, 1, 3][i]
-    if (!r) return '<div class="podium-slot"></div>'
     const base = place === 1 ? 'gold' : place === 2 ? 'silver' : 'bronze'
-    return `<div class="podium-col place-${place}">${riderBlock(r, place)}<div class="p-base ${base}"><span class="place-num num">${place}</span></div></div>`
+    if (!r) {
+      return `<div class="podium-col place-${place}"><div class="p-person is-empty"><div class="p-name">尚無達標</div><div class="p-meta">沒有第 ${place} 名</div></div><div class="p-base ${base}"><span class="place-num num">${place}</span></div></div>`
+    }
+    const recent = podiumResult.counts[r.id] || 0
+    return `<div class="podium-col place-${place}">${riderBlock(r, place)}<div class="p-recent">近 8 週 ${recent} 次</div><div class="p-base ${base}"><span class="place-num num">${place}</span></div></div>`
   }).join('') : '<div class="empty-state">這個分組還沒有成員</div>'
-  const rest = filtered.slice(3)
+  renderMonthly(today)
+  const rest = filtered
   const ticks = [2.5, 3.2, 4.0].map(v => {
     const left = (v / WKG_SCALE) * 100
     return `<i class="wkg-tick" style="left:${left}%"><span>${v}</span></i>`
@@ -866,7 +1545,7 @@ function renderLeaderboard() {
   const list = document.getElementById('rider-list')
   list.classList.toggle('rise', !lbPainted)
   list.innerHTML = rest.length ? rest.map((r, idx) => {
-    const rank = idx + 4
+    const rank = idx + 1
     const mine = isMe(r)
     const ct = cat(wkg(r))
     const count = r.attendance_count || 0
@@ -887,7 +1566,7 @@ function renderLeaderboard() {
       </div>
       <div class="wkg-track">${ticks}<div class="wkg-fill ${ct.fill}" data-w="${pct.toFixed(1)}"></div></div>
     </article>`
-  }).join('') : (filtered.length ? '<div class="empty-state">前三名都在頒獎台上</div>' : '')
+  }).join('') : ''
   const dock = document.getElementById('me-dock')
   const me = myProfile && filtered.find(r => isMe(r))
   const meAll = currentRider()
@@ -1359,19 +2038,38 @@ function rideCardHtml(r, ctx) {
   const capPct = max ? Math.min(100, Math.round(rideRegs.length / max * 100)) : 0
   const avatars = rideRegs.slice(0, 8).map(reg => avatarHtml(reg.avatar_url, reg.name, 28)).join('')
   const more = rideRegs.length > 8 ? `<span class="reg-more">+${rideRegs.length - 8}</span>` : ''
+  const squads = ctx.squads || []
+  const myReg = ctx.myReg || null
+  let squadHtml = ''
+  if (squads.length) {
+    const loose = rideRegs.filter(reg => !squads.some(g => g.id === reg.group_id))
+    squadHtml = `<div class="group-board">${squads.map(g => {
+      const people = rideRegs.filter(reg => reg.group_id === g.id)
+      return `<div class="group-block"><div><b>${esc(g.name)}</b><div class="field-help">${esc(g.pace_note || '組別說明未填')}</div><div class="group-people">${people.length ? people.map(p => esc(p.name)).join('、') : '這組還沒有人'}</div></div><span>${people.length} 人</span></div>`
+    }).join('')}${loose.length ? `<div class="group-block"><div><b>未分組</b><div class="group-people">${loose.map(p => esc(p.name)).join('、')}</div></div><span>${loose.length} 人</span></div>` : ''}</div>`
+  }
   let regAction = ''
-  if (isFull && !isRegistered) regAction = `<div class="reg-full">報名已滿</div>`
+  if (r.cancelled) regAction = `<div class="reg-full">這場已取消</div>`
+  else if (isFull && !isRegistered) regAction = `<div class="reg-full">報名已滿</div>`
   else if (isPastDeadline && !isRegistered) regAction = `<div class="reg-full">報名已截止</div>`
-  else regAction = `<button class="reg-btn${isRegistered ? ' registered' : ''}" type="button" data-act="reg" data-id="${esc(r.id)}" data-on="${isRegistered ? '1' : '0'}">${isRegistered ? icon('check', 16) + '已報名，點擊取消' : icon('plus', 16) + '我要報名'}</button>`
+  else if (isRegistered) {
+    const joined = squads.find(g => myReg && g.id === myReg.group_id)
+    regAction = `<div class="reg-status">已報名${joined ? ' · ' + esc(joined.name) : ' · 未分組'}</div><button class="reg-btn registered" type="button" data-act="reg" data-id="${esc(r.id)}" data-on="1">${icon('check', 16)}取消報名</button>`
+  } else {
+    const select = squads.length ? `<label class="field-help" for="reg-group-${esc(r.id)}">組別（選填，不會依 FTP 自動分）</label><select id="reg-group-${esc(r.id)}"><option value="">不指定組別</option>${squads.map(g => `<option value="${esc(g.id)}">${esc(g.name)}${g.pace_note ? ' · ' + esc(g.pace_note) : ''}</option>`).join('')}</select>` : ''
+    regAction = `${select}<button class="reg-btn" type="button" data-act="reg" data-id="${esc(r.id)}" data-on="0">${icon('plus', 16)}我要報名</button>`
+  }
+  const announceBtn = `<button class="edit-btn" type="button" data-act="announce" data-id="${esc(r.id)}">${icon('send', 14)}公告預覽</button>`
   const admin = isAdmin ? `<div class="ride-admin-row">
       <button class="edit-btn" type="button" data-act="edit-ride" data-id="${esc(r.id)}">${icon('pencil', 14)}編輯</button>
       <button class="edit-btn" type="button" data-act="attend-panel" data-id="${esc(r.id)}">${icon('users', 14)}出席審核</button>
       <button class="edit-btn" type="button" data-act="finish" data-id="${esc(r.id)}" data-finished="${r.is_finished ? '0' : '1'}">${r.is_finished ? '重新開啟' : '標記結束'}</button>
+      <button class="edit-btn" type="button" data-act="cancel-ride" data-id="${esc(r.id)}" data-cancelled="${r.cancelled ? '0' : '1'}">${r.cancelled ? '恢復這場' : '標記取消'}</button>
       <button class="delete-btn" type="button" data-act="del-ride" data-id="${esc(r.id)}">${icon('trash-2', 14)}刪除</button>
     </div>
     <div id="attendance-panel-${esc(r.id)}" hidden></div>
     <div id="edit-ride-form-${esc(r.id)}"></div>` : ''
-  return `<article class="ride-card${r._optimistic ? ' is-pending' : ''}" id="ride-${esc(r.id)}">
+  return `<article class="ride-card${r._optimistic ? ' is-pending' : ''}${r.cancelled ? ' is-cancelled' : ''}" id="${esc(ctx.domId || ('ride-' + r.id))}">
     <div class="wx-card ${tone}">
       <div class="waves"></div>
       <div class="wx-body">
@@ -1396,28 +2094,33 @@ function rideCardHtml(r, ctx) {
     ${r.location2 ? locRow('第二集合點', r.time2, loc2) : ''}
     ${routes.length ? `<div class="route-row">${routes.join('')}</div>` : ''}
     ${r.note ? `<div class="ride-note">${icon('info', 14)}<span>${esc(r.note)}</span></div>` : ''}
+    ${paceLine(r)}
+    ${squadHtml}
     ${ctx.group || ''}
     <div class="registration-section">
       <div class="cap-top"><span>已報名</span><b>${rideRegs.length}${max ? ' / ' + esc(max) : ''}</b><span>人</span></div>
       ${max ? `<div class="cap-bar"><div style="width:${capPct}%"></div></div>` : ''}
       ${avatars ? `<div class="reg-avatars">${avatars}${more}</div>` : ''}
       ${regAction}
+      ${announceBtn}
       ${r.deadline ? `<div class="reg-deadline">截止時間：${esc(new Date(r.deadline).toLocaleString('zh-TW'))}</div>` : ''}
       ${admin}
     </div>
   </article>`
 }
+function paceLine(r) {
+  if (!r || !r.pace_note) return ''
+  return `<div class="ride-note">${icon('gauge', 14)}<span>${esc(r.pace_note)}</span></div>`
+}
 async function renderRides() {
   const list = document.getElementById('ride-list')
   if (!ridesReady) list.innerHTML = '<div class="skel lg"></div><div class="skel lg"></div><div class="skel md"></div>'
-  const { data, error } = await db.from('rides').select('*').order('date', { ascending: false })
-  if (error) { list.innerHTML = '<div class="empty-state">無法載入團騎</div>'; return }
-  const rides = data || []
-  const activeRides = rides.filter(r => !r.is_finished)
-  const finishedRides = rides.filter(r => r.is_finished)
-  const { data: allAttsTotal } = await readFrom('attendances').select('ride_id')
+  await loadRideState()
+  if (rideState.ridesError && !(rideState.rides || []).length) { list.innerHTML = '<div class="empty-state">無法載入團騎</div>'; return }
+  const rides = rideState.rides || []
+  const finishedRides = rides.filter(r => r.is_finished && !r.cancelled)
   const totalRides = finishedRides.length
-  const totalAttendances = (allAttsTotal || []).length
+  const totalAttendances = (rideState.atts || []).length
   const myAttendances = currentRider()?.attendance_count || 0
   const statsHtml = `<div class="ride-stats-card"><div class="ride-stats-title">${icon('bike', 16)}PACE 團騎統計</div><div class="ride-stats-grid">
     <div class="ride-stat"><div class="val">${totalRides}</div><div class="lbl">總團騎次數</div></div>
@@ -1429,10 +2132,8 @@ async function renderRides() {
     list.innerHTML = statsHtml + '<div class="empty-state">目前沒有團騎公告</div>'
     return
   }
-  const { data: myRegs } = await readFrom('registrations').select('id, ride_id').eq('line_user_id', myProfile.line_user_id)
-  myRegByRide = new Map((myRegs || []).filter(r => r.id && r.ride_id).map(r => [r.ride_id, r.id]))
-  const { data: allRegs } = await readFrom('registrations').select('*')
-  const { data: allAtts } = await readFrom('attendances').select('*')
+  const allRegs = rideState.regs || []
+  const allAtts = rideState.atts || []
   const cards = await Promise.all(rides.map(async r => {
     const loc = splitLoc(r.location)
     let lat = r.weather_lat
@@ -1456,7 +2157,7 @@ async function renderRides() {
       if (attRiders.length) {
         const avg = attRiders.reduce((s, rr) => s + wkg(rr), 0) / attRiders.length
         const speeds = calcGroupSpeed(avg)
-        if (!speeds) return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), weather, aqi, group: '', loc })
+        if (!speeds) return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), myReg: myRegByRide.get(r.id), squads: (rideState.groups || []).filter(g => g.ride_id === r.id), weather, aqi, group: '', loc })
         group = `<div class="group-stats-card"><div class="group-stats-title">${icon('activity', 14)}當天出席戰力分析</div><div class="group-stats-grid">
           <div class="group-stat"><div class="val">${attRiders.length}</div><div class="lbl">出席人數</div></div>
           <div class="group-stat"><div class="val">${avg.toFixed(2)}</div><div class="lbl">平均 W/kg</div></div>
@@ -1464,18 +2165,21 @@ async function renderRides() {
         </div></div>`
       }
     }
-    return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), weather, aqi, group, loc })
+    return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), myReg: myRegByRide.get(r.id), squads: (rideState.groups || []).filter(g => g.ride_id === r.id), weather, aqi, group, loc })
   }))
-  const activeCards = cards.filter((_, i) => !rides[i].is_finished)
-  const finishedCards = cards.filter((_, i) => rides[i].is_finished)
+  const activeIdx = rides.map((r, i) => ({ r, i })).filter(x => !x.r.is_finished && !x.r.cancelled)
+  activeIdx.sort((a, b) => String(a.r.date).localeCompare(String(b.r.date)) || String(a.r.time || '').localeCompare(String(b.r.time || '')))
+  const activeCards = activeIdx.map(x => cards[x.i])
+  const finishedCards = cards.filter((_, i) => rides[i].is_finished || rides[i].cancelled)
   const finishedSection = finishedCards.length ? `<div class="finished-section">
-    <button class="finished-header" type="button" data-act="toggle-finished"><span>已結束的團騎（${finishedCards.length}）</span><span id="finished-arrow">${icon('chevron-down', 16)}</span></button>
+    <button class="finished-header" type="button" data-act="toggle-finished"><span>已結束或取消（${finishedCards.length}）</span><span id="finished-arrow">${icon('chevron-down', 16)}</span></button>
     <div id="finished-list" hidden>${finishedCards.join('')}</div>
   </div>` : ''
   const first = !ridesReady
   ridesReady = true
   list.innerHTML = statsHtml + activeCards.join('') + finishedSection
   list.classList.toggle('rise', first)
+  renderNextRide()
   tickCountdowns()
 }
 function tickCountdowns() {
@@ -1505,7 +2209,10 @@ function showEditRideForm(rideId) {
       <div class="form-row"><label>日期</label><input type="date" id="edit-date-${esc(rideId)}" value="${esc(r.date)}"></div>
       <div class="form-row"><label>第一集合點時間</label><input type="time" id="edit-time-${esc(rideId)}" value="${esc(r.time || '')}"></div>
       <div class="form-row"><label>第二集合點時間</label><input type="time" id="edit-time2-${esc(rideId)}" value="${esc(r.time2 || '')}"></div>
-      <div class="form-row"><label>Garmin Code</label><input type="text" id="edit-garmin-${esc(rideId)}" value="${esc(r.garmin_code || '')}"></div>
+      <div class="form-row"><label>這一場的 GroupRide 代碼（可稍後再補，不會沿用別場）</label><input type="text" id="edit-garmin-${esc(rideId)}" value="${esc(r.garmin_code || '')}"></div>
+      <div class="form-row"><label>配速說明</label><input type="text" id="edit-pace-${esc(rideId)}" value="${esc(r.pace_note || '')}"></div>
+      <div class="form-row"><label>距離 km</label><input type="number" id="edit-distance-${esc(rideId)}" value="${esc(r.distance_km ?? '')}"></div>
+      <div class="form-row"><label>爬升 m</label><input type="number" id="edit-ascent-${esc(rideId)}" value="${esc(r.ascent_m ?? '')}"></div>
       <div class="form-row"><label>Strava 路線</label><input type="text" id="edit-strava-${esc(rideId)}" value="${esc(r.strava_url || '')}"></div>
       <div class="form-row"><label>Garmin 路線</label><input type="text" id="edit-garmin-url-${esc(rideId)}" value="${esc(r.garmin_url || '')}"></div>
       <div class="form-row"><label>備註</label><input type="text" id="edit-note-${esc(rideId)}" value="${esc(r.note || '')}"></div>
@@ -1537,8 +2244,16 @@ async function updateRide(rideId) {
     strava_url: document.getElementById('edit-strava-' + rideId).value.trim(),
     garmin_url: document.getElementById('edit-garmin-url-' + rideId).value.trim(),
     note: document.getElementById('edit-note-' + rideId).value.trim(),
+    pace_note: (document.getElementById('edit-pace-' + rideId) || {}).value ? document.getElementById('edit-pace-' + rideId).value.trim() : undefined,
+    distance_km: document.getElementById('edit-distance-' + rideId) && document.getElementById('edit-distance-' + rideId).value !== '' ? Number(document.getElementById('edit-distance-' + rideId).value) : null,
+    ascent_m: document.getElementById('edit-ascent-' + rideId) && document.getElementById('edit-ascent-' + rideId).value !== '' ? Number(document.getElementById('edit-ascent-' + rideId).value) : null,
     max_participants: parseInt(document.getElementById('edit-max-' + rideId).value, 10) || null,
     weather_lat: weatherLat, weather_lng: weatherLng, weather_location_name: weatherName
+  }
+  if (!schemaCaps.rideExtras) {
+    delete payload.pace_note
+    delete payload.distance_km
+    delete payload.ascent_m
   }
   const { error } = await db.from('rides').update(payload).eq('id', rideId)
   if (error) { showToast('儲存失敗'); return }
@@ -1546,18 +2261,40 @@ async function updateRide(rideId) {
   renderRides()
 }
 async function toggleRegistration(rideId, isRegistered) {
-  const card = document.getElementById('ride-' + rideId)
+  const card = document.getElementById('ride-' + rideId) || document.getElementById('next-ride')
   const btn = card && card.querySelector('[data-act="reg"]')
   if (btn) { btn.disabled = true; btn.textContent = isRegistered ? '取消中…' : '送出中…' }
-  const existingId = myRegByRide.get(rideId)
+  const existing = myRegByRide.get(rideId)
+  const existingId = existing && existing.id ? existing.id : existing
   if (isRegistered && !existingId) {
     showToast('取消失敗，請再試一次')
     renderRides()
     return
   }
+  let insertRow = null
+  if (!isRegistered) {
+    const chosen = (document.getElementById('reg-group-' + rideId) || {}).value || ''
+    const built = globalThis.PaceCore ? PaceCore.buildRegistration({
+      rideId,
+      groupId: chosen,
+      groups: rideState.groups || [],
+      allowGroup: schemaCaps.regGroup
+    }) : { ok: !chosen, row: { ride_id: rideId } }
+    if (!built.ok) {
+      showToast(built.reason === 'bad-group' ? '這個組別不屬於這一場' : '現在不能選組別')
+      renderRides()
+      return
+    }
+    insertRow = Object.assign({
+      line_user_id: myProfile.line_user_id,
+      name: myProfile.name,
+      avatar_url: myProfile.avatar_url || ''
+    }, built.row)
+    if (!schemaCaps.regGroup) delete insertRow.group_id
+  }
   const res = isRegistered
     ? await db.from('registrations').delete().eq('id', existingId)
-    : await db.from('registrations').insert({ ride_id: rideId, line_user_id: myProfile.line_user_id, name: myProfile.name, avatar_url: myProfile.avatar_url || '' })
+    : await db.from('registrations').insert(insertRow)
   if (res.error) {
     showToast(isRegistered ? '取消失敗，請再試一次' : '報名失敗，請再試一次')
     renderRides()
@@ -1631,6 +2368,8 @@ async function toggleAttendance(rideId, btn) {
     showToast('已確認出席')
   }
   await loadRiders()
+  await loadRideState()
+  await loadRankingContext()
   renderLeaderboard()
   if (isMe(rider)) renderProfile()
 }
@@ -1686,12 +2425,13 @@ async function saveRide() {
   const deadlineVal = document.getElementById('ride-deadline').value
   const maxVal = document.getElementById('ride-max').value
   const btn = document.querySelector('#ride-form .save-btn')
+  if (btn.disabled) return
   btn.disabled = true
   const placeholder = document.createElement('div')
   placeholder.className = 'skel lg'
   document.getElementById('ride-list').prepend(placeholder)
   showToast('發布中…')
-  const { error } = await db.from('rides').insert({
+  const payload = {
     title, date, time,
     time2: document.getElementById('ride-time2').value || '',
     location: location1,
@@ -1703,14 +2443,38 @@ async function saveRide() {
     deadline: deadlineVal ? new Date(deadlineVal).toISOString() : null,
     max_participants: maxVal ? parseInt(maxVal, 10) : null,
     weather_lat: weatherLat, weather_lng: weatherLng, weather_location_name: weatherName
-  })
+  }
+  const groupLines = document.getElementById('ride-groups') ? document.getElementById('ride-groups').value : ''
+  if (schemaCaps.rideExtras) {
+    const distance = document.getElementById('ride-distance').value
+    const ascent = document.getElementById('ride-ascent').value
+    const estimated = document.getElementById('ride-estimated').checked
+    payload.pace_note = document.getElementById('ride-pace').value.trim()
+    payload.distance_km = distance === '' ? null : Number(distance)
+    payload.ascent_m = ascent === '' ? null : Number(ascent)
+    payload.distance_estimated = estimated && payload.distance_km != null
+    payload.ascent_estimated = estimated && payload.ascent_m != null
+    payload.cancelled = false
+    const routeId = document.getElementById('ride-route').value
+    if (routeId) payload.route_id = routeId
+  }
+  const inserted = await db.from('rides').insert(payload).select('id')
   btn.disabled = false
   placeholder.remove()
-  if (error) { showToast('發布失敗，請再試一次'); return }
-  ;['ride-title', 'ride-note', 'ride-strava', 'ride-garmin-url', 'ride-garmin', 'ride-max', 'ride-deadline', 'ride-time2'].forEach(id => { document.getElementById(id).value = '' })
+  if (inserted.error) { showToast('發布失敗，請再試一次'); return }
+  const newId = insertedId(inserted)
+  if (schemaCaps.groups && newId && groupLines.trim()) {
+    const groups = parseGroupLines(groupLines).map(g => Object.assign({ ride_id: newId }, g))
+    if (groups.length) await db.from('ride_groups').insert(groups)
+  }
+  ;['ride-title', 'ride-note', 'ride-strava', 'ride-garmin-url', 'ride-garmin', 'ride-max', 'ride-deadline', 'ride-time2', 'ride-pace', 'ride-distance', 'ride-ascent', 'ride-groups'].forEach(id => {
+    const el = document.getElementById(id)
+    if (el) el.value = ''
+  })
   showToast('團騎公告發布成功')
   hideRideForm()
-  renderRides()
+  await renderRides()
+  if (newId) openAnnouncement(newId)
 }
 async function deleteRide(id) {
   const ok = await askConfirm({ title: '刪除團騎公告', body: '刪除後無法復原，相關報名也會一併移除。確定要刪除嗎？', ok: '刪除', danger: true })
@@ -1905,6 +2669,8 @@ function switchAdminTab(id) {
   document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'))
   const panel = document.getElementById('admin-' + id)
   if (panel) panel.classList.add('active')
+  if (id === 'studio') renderStudio()
+  if (id === 'routes') renderRouteAdmin()
 }
 async function shareProfile() {
   const me = currentRider()
@@ -1966,6 +2732,18 @@ function onGlobalClick(e) {
   else if (act === 'del-loc') deleteLocation(el.dataset.id)
   else if (act === 'del-gl') deleteGuideline(el.dataset.id)
   else if (act === 'edit-gl') editGuideline(el.dataset.id)
+  else if (act === 'announce') openAnnouncement(el.dataset.id)
+  else if (act === 'announce-share') shareCurrentAnnouncement()
+  else if (act === 'announce-copy') copyAnnouncementOnly()
+  else if (act === 'announce-close') { const box = document.getElementById('announce'); if (box) box.hidden = true }
+  else if (act === 'cancel-ride') setRideCancelled(el.dataset.id, el.dataset.cancelled === '1')
+  else if (act === 'copy-preview') previewStudio()
+  else if (act === 'copy-publish') publishStudio()
+  else if (act === 'save-template') saveTemplateFromStudio()
+  else if (act === 'use-template') stageTemplate(el.dataset.id)
+  else if (act === 'bulk-preview') previewBulk()
+  else if (act === 'bulk-publish') publishBulk()
+  else if (act === 'save-route') saveRoute()
 }
 function onTouchStart(e) {
   if (e.touches.length !== 1) return

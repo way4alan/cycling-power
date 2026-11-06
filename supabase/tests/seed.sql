@@ -2,7 +2,11 @@
 truncate table
   public.attendances,
   public.registrations,
+  public.ride_groups,
+  public.ride_template_groups,
+  public.ride_templates,
   public.rides,
+  public.routes,
   public.riders,
   public.locations,
   public.guidelines,
