@@ -368,6 +368,79 @@ test('a failed directory read is not treated as a new member', () => {
   assert.equal(P.isMissingSchemaError({ code: '42501', message: 'permission denied' }), false)
 })
 
+test('home picks the nearest challenge inside 90 days and falls back to Sunday', () => {
+  const now = new Date('2026-11-09T02:00:00Z').getTime()
+  const rides = [
+    { id: 'sun', category: 'sunday', date: '2026-11-15', time: '06:00', title: '週日晨騎' },
+    { id: 'near', category: 'challenge', date: '2026-12-06', time: '05:00', title: '武嶺', distance_km: 105, ascent_m: 3275 },
+    { id: 'later', category: 'challenge', date: '2026-12-20', time: '05:00', title: '阿里山' },
+    { id: 'far', category: 'challenge', date: '2027-03-01', time: '05:00', title: '合歡山' },
+    { id: 'month', category: 'monthly', date: '2026-11-22', time: '06:30', title: '11月檢定' },
+    { id: 'done', category: 'challenge', date: '2026-11-20', time: '05:00', title: '已結束', is_finished: true },
+    { id: 'cx', category: 'challenge', date: '2026-11-16', time: '05:00', title: '取消', cancelled: true }
+  ]
+  const layout = P.homeLayout(rides, now)
+  assert.equal(layout.challengeWindowDays, 90)
+  assert.equal(layout.hero.id, 'near')
+  assert.equal(layout.heroKind, 'challenge')
+  assert.equal(layout.compactSunday.id, 'sun')
+  assert.equal(layout.monthly.id, 'month')
+  assert.equal(layout.preparation.days, 27)
+  assert.match(layout.preparation.label, /週可以準備/)
+  const fallback = P.homeLayout(rides.filter(r => r.id !== 'near' && r.id !== 'later'), now)
+  assert.equal(fallback.hero.id, 'sun')
+  assert.equal(fallback.heroKind, 'sunday-fallback')
+  assert.equal(fallback.compactSunday.id, 'sun')
+  assert.notEqual(fallback.hero.id, 'far')
+  assert.notEqual(fallback.hero.id, 'month')
+  const onlyMonthly = P.homeLayout([rides.find(r => r.id === 'month')], now)
+  assert.equal(onlyMonthly.hero, null)
+  assert.equal(onlyMonthly.monthly.id, 'month')
+  const legacy = P.homeLayout([{ id: 'old', date: '2026-11-15', time: '06:00', title: '舊資料' }], now)
+  assert.equal(legacy.hero.id, 'old')
+  assert.equal(legacy.heroKind, 'sunday-fallback')
+  assert.equal(P.normalizeCategory('hack'), 'sunday')
+  assert.equal(P.categoryLabel('challenge'), '年度挑戰')
+})
+
+test('copy keeps the ride category and challenge notes, not the old code', () => {
+  const source = {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    title: '武嶺',
+    date: '2026-04-01',
+    time: '05:00',
+    location: '埔里',
+    category: 'challenge',
+    pacing_guide: '自己的節奏',
+    supply_points: '20 公里補水',
+    cutoff_times: '09:30',
+    gear_list: '頭燈',
+    garmin_code: 'OLDCODE',
+    is_finished: true,
+    cancelled: true
+  }
+  const draft = P.rideDraftFromSource(source, [])
+  assert.equal(draft.category, 'challenge')
+  assert.equal(draft.pacing_guide, '自己的節奏')
+  assert.equal(draft.garmin_code, undefined)
+  const preview = P.previewCopies([{
+    key: 'one',
+    sourceKind: 'ride',
+    sourceId: source.id,
+    date: '2026-12-06',
+    garminCode: '',
+    draft
+  }])
+  const payload = preview.items[0].payload
+  assert.equal(payload.category, 'challenge')
+  assert.equal(payload.pacing_guide, '自己的節奏')
+  assert.equal(payload.supply_points, '20 公里補水')
+  assert.equal(payload.garmin_code, '')
+  assert.equal(payload.is_finished, false)
+  assert.equal(payload.cancelled, false)
+  assert.equal(P.rideDraftFromSource({ title: 'x', time: '06:00', location: 'a', category: 'nope' }, []).category, 'sunday')
+})
+
 test('next ride is the soonest upcoming unfinished ride', () => {
   const now = new Date('2026-11-06T22:30:00Z').getTime()
   const rides = [

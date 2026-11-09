@@ -431,9 +431,9 @@ function parseGroupLines(text) {
   }).filter(g => g.name)
 }
 async function probeSchema() {
-  schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false }
+  schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false, category: false }
   if (DEMO) {
-    schemaCaps = { groups: true, templates: true, routes: true, rideExtras: true, regGroup: true }
+    schemaCaps = { groups: true, templates: true, routes: true, rideExtras: true, regGroup: true, category: true }
     return
   }
   const checks = [
@@ -441,7 +441,8 @@ async function probeSchema() {
     ['templates', 'ride_templates', 'id'],
     ['routes', 'routes', 'id'],
     ['rideExtras', 'rides', 'cancelled'],
-    ['regGroup', 'registrations_directory', 'group_id']
+    ['regGroup', 'registrations_directory', 'group_id'],
+    ['category', 'rides', 'category']
   ]
   await Promise.all(checks.map(async ([key, table, col]) => {
     const res = await db.from(table).select(col).limit(1)
@@ -484,6 +485,7 @@ async function loadRideState() {
   const extra = document.getElementById('ride-extra')
   if (extra) extra.hidden = !schemaCaps.rideExtras
   fillRouteSelect()
+  syncChallengeFields()
 }
 async function loadRankingContext() {
   rankingCtx = {
@@ -504,25 +506,94 @@ function fillRouteSelect() {
   sel.innerHTML = '<option value="">不套用路線</option>' + (rideState.routes || []).map(route => `<option value="${esc(route.id)}">${esc(route.title)}</option>`).join('')
   if (current) sel.value = current
 }
+function syncChallengeFields() {
+  const row = document.getElementById('ride-category-row')
+  const fields = document.getElementById('challenge-fields')
+  const cat = document.getElementById('ride-category')
+  if (row) row.hidden = !schemaCaps.category
+  if (fields) fields.hidden = !schemaCaps.category || !cat || cat.value !== 'challenge'
+}
+function statCell(val, unit, label) {
+  if (val == null || val === '') return ''
+  return `<div class="cell"><div class="val">${esc(String(val))}<small>${esc(unit)}</small></div><div class="lbl">${esc(label)}</div></div>`
+}
+function countdownHtml(ride) {
+  const start = rideStartMs(ride.date, ride.time)
+  if (Number.isFinite(start) && start <= Date.now()) return '<div class="cd-past">已出發</div>'
+  if (!Number.isFinite(start)) return ''
+  return `<div class="cd-grid" data-countdown="${start}">
+    <div class="cd-cell"><b data-part="d">00</b><span>天</span></div>
+    <div class="cd-cell"><b data-part="h">00</b><span>時</span></div>
+    <div class="cd-cell"><b data-part="m">00</b><span>分</span></div>
+    <div class="cd-cell"><b data-part="s">00</b><span>秒</span></div>
+  </div>`
+}
+function heroCardHtml(ride, layout) {
+  const kind = layout.heroKind === 'challenge' ? '年度挑戰' : '週日固定團騎'
+  const distLabel = '距離' + (ride.distance_estimated ? '（估算）' : '')
+  const ascentLabel = '爬升' + (ride.ascent_estimated ? '（估算）' : '')
+  const stats = statCell(ride.distance_km, 'km', distLabel) + statCell(ride.ascent_m, 'm', ascentLabel)
+  return `<article class="ride-card hero-card" data-act="open-ride" data-id="${esc(ride.id)}" tabindex="0">
+    <div class="wx-card wx-none"><div class="waves"></div><div class="wx-body">
+      <div class="wx-kicker">${icon('flag', 16)}${kind}</div>
+      <div class="wx-title">${esc(ride.title)}</div>
+      <div class="wx-when"><span>${icon('calendar', 14)}${formatRideDate(ride.date)}</span></div>
+    </div></div>
+    <div class="cd-block"><div class="cd-label"><span>距離出發</span></div>${countdownHtml(ride)}</div>
+    ${stats ? `<div class="stat-strip">${stats}</div>` : ''}
+    ${layout.preparation && layout.preparation.label ? `<p class="prep-hint">${esc(layout.preparation.label)}</p>` : ''}
+  </article>`
+}
+function compactSundayHtml(ride) {
+  const regs = (rideState.regs || []).filter(reg => reg.ride_id === ride.id)
+  const mine = myRegByRide.get(ride.id)
+  const loc = splitLoc(ride.location)
+  const squads = (rideState.groups || []).filter(g => g.ride_id === ride.id)
+  const joined = squads.find(g => mine && g.id === mine.group_id)
+  const status = mine ? `<div class="reg-status">已報名${joined ? ' · ' + esc(joined.name) : ''}</div>` : ''
+  const action = mine
+    ? `<button class="reg-btn registered" type="button" data-act="reg" data-id="${esc(ride.id)}" data-on="1">${icon('check', 16)}取消報名</button>`
+    : `<button class="reg-btn" type="button" data-act="reg" data-id="${esc(ride.id)}" data-on="0">${icon('plus', 16)}我要報名</button>`
+  return `<article class="card compact-ride">
+    <button class="compact-open" type="button" data-act="open-ride" data-id="${esc(ride.id)}">
+      <span class="compact-kicker">週日固定團騎</span>
+      <strong>${esc(ride.title)}</strong>
+      <span>${formatRideDate(ride.date)} · ${esc(String(ride.time || '').slice(0, 5))}</span>
+      <span>${esc(loc.name || '')}</span>
+    </button>
+    <div class="compact-foot">
+      <div class="compact-meta">已報名 ${regs.length}${ride.max_participants ? ' / ' + esc(ride.max_participants) : ''} 人</div>
+      ${status}
+      <div class="home-actions">
+        ${action}
+        <button class="edit-btn share-ride-btn" type="button" data-act="announce" data-id="${esc(ride.id)}">${icon('send', 14)}公告</button>
+      </div>
+    </div>
+  </article>`
+}
+function renderMonthlyHint(layout) {
+  const hint = document.getElementById('monthly-test-hint')
+  if (!hint) return
+  if (!layout || !layout.monthly) { hint.hidden = true; hint.textContent = ''; return }
+  hint.hidden = false
+  hint.textContent = '下次每月檢定：' + formatRideDate(layout.monthly.date) + ' ' + (layout.monthly.title || '')
+}
 function renderNextRide() {
   const host = document.getElementById('next-ride')
   if (!host || !globalThis.PaceCore) return
-  const ride = PaceCore.nextUpcoming(rideState.rides || [], Date.now())
-  if (!ride) {
-    host.innerHTML = '<div class="card empty-state">目前沒有即將出發的團騎</div>'
-    return
-  }
-  const regs = (rideState.regs || []).filter(reg => reg.ride_id === ride.id)
-  host.innerHTML = rideCardHtml(ride, {
-    regs,
-    mine: myRegByRide.has(ride.id),
-    myReg: myRegByRide.get(ride.id),
-    squads: (rideState.groups || []).filter(g => g.ride_id === ride.id),
-    weather: null,
-    aqi: null,
-    group: '',
-    domId: 'hero-' + ride.id
-  })
+  const layout = PaceCore.homeLayout(rideState.rides || [], Date.now())
+  const parts = []
+  if (layout.hero) parts.push(heroCardHtml(layout.hero, layout))
+  else parts.push('<div class="card empty-state">90 天內沒有年度挑戰，也沒有即將出發的週日團騎</div>')
+  if (layout.compactSunday) parts.push(compactSundayHtml(layout.compactSunday))
+  host.innerHTML = parts.join('')
+  renderMonthlyHint(layout)
+}
+function openRide(id) {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(id || ''))) return
+  switchTab('ride')
+  const node = document.getElementById('ride-' + id)
+  if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
 }
 function renderMonthly(today) {
   const host = document.getElementById('monthly-board')
@@ -557,6 +628,9 @@ function renderStudio() {
       <h2>從過去的團騎建立新的一場</h2>
       <p class="studio-note">會帶入標題、集合點、時間、Garmin 路線連結和備註。不會帶入報名、出席、舊的 GroupRide 代碼、舊日期或已結束／已取消狀態。選取範本或舊團騎都還不會發布。</p>
       <div class="form-row"><label for="copy-source">過去的團騎</label><select id="copy-source"><option value="">請選擇</option>${options}</select></div>
+      <div class="form-row"><label for="copy-category">團騎類型</label>
+        <select id="copy-category"><option value="sunday">週日固定團騎</option><option value="challenge">年度挑戰</option><option value="monthly">每月檢定</option></select>
+      </div>
       <div class="form-row"><label for="copy-date">新的日期</label><input type="date" id="copy-date"></div>
       <div class="form-row"><label for="copy-code">這一場的 GroupRide 代碼（選填）</label>
         <p class="field-help">必須是這一場新建立的代碼，可以晚點再補。舊代碼不會帶過來。</p>
@@ -611,6 +685,8 @@ function stagePastRide(id) {
   if (code) code.value = ''
   const date = document.getElementById('copy-date')
   if (date) date.value = ''
+  const cat = document.getElementById('copy-category')
+  if (cat) cat.value = PaceCore.normalizeCategory(studioDraft.category)
 }
 function stageTemplate(id) {
   const template = (rideState.templates || []).find(t => t.id === id)
@@ -626,18 +702,23 @@ function stageTemplate(id) {
   if (code) code.value = ''
   const date = document.getElementById('copy-date')
   if (date) date.value = ''
+  const cat = document.getElementById('copy-category')
+  if (cat) cat.value = PaceCore.normalizeCategory(studioDraft.category)
   const draft = document.getElementById('copy-draft')
   if (draft) draft.textContent = '已帶入範本「' + template.title + '」，尚未發布。請填新日期後才按發布。'
 }
 function studioItem() {
   if (!studioDraft || !studioSource) return null
+  const draft = Object.assign({}, studioDraft)
+  const cat = document.getElementById('copy-category')
+  if (cat && cat.value) draft.category = PaceCore.normalizeCategory(cat.value)
   return {
     key: studioSource.id,
     sourceKind: studioSource.kind,
     sourceId: studioSource.id,
     date: (document.getElementById('copy-date') || {}).value || '',
     garminCode: (document.getElementById('copy-code') || {}).value || '',
-    draft: studioDraft
+    draft: draft
   }
 }
 function previewStudio() {
@@ -657,6 +738,7 @@ function previewStudio() {
     '集合：' + view.payload.time + ' ' + view.payload.location,
     '路線：' + (view.payload.garmin_url || '（沒有）'),
     '備註：' + (view.payload.note || '（沒有）'),
+    '類型：' + PaceCore.categoryLabel(view.payload.category),
     'GroupRide 代碼：' + (view.payload.garmin_code || '（這場還沒有，不會沿用舊代碼）'),
     '報名 0 人，出席 0 人',
     '新編號會由資料庫產生；狀態是未結束、未取消'
@@ -665,6 +747,7 @@ function previewStudio() {
 async function insertCopiedRide(item) {
   const payload = Object.assign({}, item.payload)
   if (!schemaCaps.rideExtras) ['pace_note', 'distance_km', 'ascent_m', 'distance_estimated', 'ascent_estimated', 'route_id', 'cancelled', 'source_key'].forEach(key => { delete payload[key] })
+  if (!schemaCaps.category) ['category', 'pacing_guide', 'supply_points', 'cutoff_times', 'gear_list'].forEach(key => { delete payload[key] })
   const res = await db.from('rides').insert(payload).select('id')
   if (res.error) {
     const duplicate = res.error.code === '23505' || /duplicate|source_key/i.test(res.error.message || '')
@@ -759,6 +842,11 @@ async function saveTemplateFromStudio() {
     strava_url: studioDraft.strava_url || '',
     garmin_url: studioDraft.garmin_url || '',
     pace_note: studioDraft.pace_note || '',
+    category: schemaCaps.category ? PaceCore.normalizeCategory(studioDraft.category) : undefined,
+    pacing_guide: schemaCaps.category ? (studioDraft.pacing_guide || '') : undefined,
+    supply_points: schemaCaps.category ? (studioDraft.supply_points || '') : undefined,
+    cutoff_times: schemaCaps.category ? (studioDraft.cutoff_times || '') : undefined,
+    gear_list: schemaCaps.category ? (studioDraft.gear_list || '') : undefined,
     distance_km: studioDraft.distance_km,
     ascent_m: studioDraft.ascent_m,
     distance_estimated: studioDraft.distance_estimated === true,
@@ -970,6 +1058,10 @@ function openRequestedPanel() {
     switchAdminTab('routes')
     renderRouteAdmin()
   }
+  if (open === 'form' && isAdmin) {
+    switchTab('ride')
+    showRideForm()
+  }
   if (open === 'announce') {
     const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
     const id = safeRide && (rideState.rides || []).some(r => r.id === safeRide) ? safeRide : fallback
@@ -1176,7 +1268,7 @@ function createDemoDb() {
     ],
     rides: [
       {
-        id: 'ride-next', title: '週日晨騎 壽山環線', date: sunday, time: '06:00', time2: '',
+        id: 'ride-next', title: '週日晨騎 壽山環線', category: 'sunday', date: sunday, time: '06:00', time2: '',
         location: '愛河之心｜高雄市苓雅區四維三路2號', location2: '',
         garmin_code: '', note: '分組後各組自己騎', strava_url: '',
         garmin_url: 'https://connect.garmin.com/modern/course/123456789',
@@ -1201,7 +1293,33 @@ function createDemoDb() {
       { id: 'ride-win', title: '窗內舊騎', date: day(-40), time: '06:00', location: '旗津', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
       { id: 'ride-out', title: '超過八週', date: day(-57), time: '06:00', location: '旗津', garmin_code: '', note: '', is_finished: true, cancelled: false, created_at: now },
       { id: 'ride-cancel', title: '改期取消', date: day(-1), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: true, cancelled: true, created_at: now },
-      { id: 'ride-future', title: '還沒騎', date: day(3), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now }
+      { id: 'ride-future', title: '還沒騎', category: 'sunday', date: shiftDate(sunday, 14), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now },
+      {
+        id: 'ride-wuling', title: '武嶺', category: 'challenge', date: shiftDate(sunday, 21), time: '05:00',
+        location: '埔里｜南投縣埔里鎮', garmin_code: '', note: '示範年度挑戰',
+        garmin_url: 'https://connect.garmin.com/modern/course/123456789',
+        distance_km: 105, ascent_m: 3275, distance_estimated: false, ascent_estimated: false,
+        pacing_guide: '前段自己的節奏，坡底不要硬追。',
+        supply_points: '20 公里便利商店、山頂補水。',
+        cutoff_times: '09:30 過不了中繼就原路下。',
+        gear_list: '頭燈、雨衣、備用電。',
+        is_finished: false, cancelled: false, created_at: now
+      },
+      {
+        id: 'ride-alishan', title: '阿里山', category: 'challenge', date: shiftDate(sunday, 70), time: '05:30',
+        location: '嘉義｜嘉義市', distance_km: 90, ascent_m: 2100,
+        garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now
+      },
+      {
+        id: 'ride-far', title: '合歡山', category: 'challenge', date: shiftDate(sunday, 120), time: '05:00',
+        location: '清境｜南投縣仁愛鄉', distance_km: 80, ascent_m: 1800,
+        garmin_code: '', note: '超過 90 天，不會佔首頁主卡', is_finished: false, cancelled: false, created_at: now
+      },
+      {
+        id: 'ride-monthly', title: '11月檢定', category: 'monthly', date: shiftDate(sunday, 7), time: '06:30',
+        location: '愛河之心｜高雄市苓雅區四維三路2號', distance_km: 40, ascent_m: 200,
+        garmin_code: '', note: '示範每月檢定', is_finished: false, cancelled: false, created_at: now
+      }
     ],
     ride_groups: [
       { id: 'gA', ride_id: 'ride-next', name: 'A 組', pace_note: '有人輪帶，自己的節奏', sort_order: 0 },
@@ -1240,6 +1358,7 @@ function createDemoDb() {
       { id: 'a-old3', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' }
     ]
   }
+  if (params.get('scenario') === 'fallback') store.rides = store.rides.filter(r => r.category !== 'challenge')
   let seq = 1
   function Query(table) {
     this.table = table
@@ -2095,6 +2214,7 @@ function rideCardHtml(r, ctx) {
     ${routes.length ? `<div class="route-row">${routes.join('')}</div>` : ''}
     ${r.note ? `<div class="ride-note">${icon('info', 14)}<span>${esc(r.note)}</span></div>` : ''}
     ${paceLine(r)}
+    ${challengeBrief(r)}
     ${squadHtml}
     ${ctx.group || ''}
     <div class="registration-section">
@@ -2111,6 +2231,17 @@ function rideCardHtml(r, ctx) {
 function paceLine(r) {
   if (!r || !r.pace_note) return ''
   return `<div class="ride-note">${icon('gauge', 14)}<span>${esc(r.pace_note)}</span></div>`
+}
+function challengeBrief(r) {
+  if (!globalThis.PaceCore || PaceCore.normalizeCategory(r.category) !== 'challenge') return ''
+  const rows = [
+    ['配速建議', r.pacing_guide],
+    ['補給點', r.supply_points],
+    ['關門時間', r.cutoff_times],
+    ['裝備清單', r.gear_list]
+  ].filter(([, value]) => String(value || '').trim())
+  if (!rows.length) return ''
+  return `<section class="challenge-brief"><h3>年度挑戰</h3>${rows.map(([label, value]) => `<div><b>${label}</b><p>${esc(value)}</p></div>`).join('')}</section>`
 }
 async function renderRides() {
   const list = document.getElementById('ride-list')
@@ -2211,6 +2342,15 @@ function showEditRideForm(rideId) {
       <div class="form-row"><label>第二集合點時間</label><input type="time" id="edit-time2-${esc(rideId)}" value="${esc(r.time2 || '')}"></div>
       <div class="form-row"><label>這一場的 GroupRide 代碼（可稍後再補，不會沿用別場）</label><input type="text" id="edit-garmin-${esc(rideId)}" value="${esc(r.garmin_code || '')}"></div>
       <div class="form-row"><label>配速說明</label><input type="text" id="edit-pace-${esc(rideId)}" value="${esc(r.pace_note || '')}"></div>
+      ${schemaCaps.category ? `<div class="form-row"><label>團騎類型</label><select id="edit-category-${esc(rideId)}">
+        <option value="sunday" ${(!r.category || r.category === 'sunday') ? 'selected' : ''}>週日固定團騎</option>
+        <option value="challenge" ${r.category === 'challenge' ? 'selected' : ''}>年度挑戰</option>
+        <option value="monthly" ${r.category === 'monthly' ? 'selected' : ''}>每月檢定</option>
+      </select></div>
+      <div class="form-row"><label>配速建議</label><textarea id="edit-pacing-${esc(rideId)}" rows="2">${esc(r.pacing_guide || '')}</textarea></div>
+      <div class="form-row"><label>補給點</label><textarea id="edit-supply-${esc(rideId)}" rows="2">${esc(r.supply_points || '')}</textarea></div>
+      <div class="form-row"><label>關門時間</label><textarea id="edit-cutoff-${esc(rideId)}" rows="2">${esc(r.cutoff_times || '')}</textarea></div>
+      <div class="form-row"><label>裝備清單</label><textarea id="edit-gear-${esc(rideId)}" rows="2">${esc(r.gear_list || '')}</textarea></div>` : ''}
       <div class="form-row"><label>距離 km</label><input type="number" id="edit-distance-${esc(rideId)}" value="${esc(r.distance_km ?? '')}"></div>
       <div class="form-row"><label>爬升 m</label><input type="number" id="edit-ascent-${esc(rideId)}" value="${esc(r.ascent_m ?? '')}"></div>
       <div class="form-row"><label>Strava 路線</label><input type="text" id="edit-strava-${esc(rideId)}" value="${esc(r.strava_url || '')}"></div>
@@ -2245,6 +2385,11 @@ async function updateRide(rideId) {
     garmin_url: document.getElementById('edit-garmin-url-' + rideId).value.trim(),
     note: document.getElementById('edit-note-' + rideId).value.trim(),
     pace_note: (document.getElementById('edit-pace-' + rideId) || {}).value ? document.getElementById('edit-pace-' + rideId).value.trim() : undefined,
+    category: document.getElementById('edit-category-' + rideId) ? PaceCore.normalizeCategory(document.getElementById('edit-category-' + rideId).value) : undefined,
+    pacing_guide: document.getElementById('edit-pacing-' + rideId) ? document.getElementById('edit-pacing-' + rideId).value.trim() : undefined,
+    supply_points: document.getElementById('edit-supply-' + rideId) ? document.getElementById('edit-supply-' + rideId).value.trim() : undefined,
+    cutoff_times: document.getElementById('edit-cutoff-' + rideId) ? document.getElementById('edit-cutoff-' + rideId).value.trim() : undefined,
+    gear_list: document.getElementById('edit-gear-' + rideId) ? document.getElementById('edit-gear-' + rideId).value.trim() : undefined,
     distance_km: document.getElementById('edit-distance-' + rideId) && document.getElementById('edit-distance-' + rideId).value !== '' ? Number(document.getElementById('edit-distance-' + rideId).value) : null,
     ascent_m: document.getElementById('edit-ascent-' + rideId) && document.getElementById('edit-ascent-' + rideId).value !== '' ? Number(document.getElementById('edit-ascent-' + rideId).value) : null,
     max_participants: parseInt(document.getElementById('edit-max-' + rideId).value, 10) || null,
@@ -2254,6 +2399,13 @@ async function updateRide(rideId) {
     delete payload.pace_note
     delete payload.distance_km
     delete payload.ascent_m
+  }
+  if (!schemaCaps.category) {
+    delete payload.category
+    delete payload.pacing_guide
+    delete payload.supply_points
+    delete payload.cutoff_times
+    delete payload.gear_list
   }
   const { error } = await db.from('rides').update(payload).eq('id', rideId)
   if (error) { showToast('儲存失敗'); return }
@@ -2273,7 +2425,7 @@ async function toggleRegistration(rideId, isRegistered) {
   }
   let insertRow = null
   if (!isRegistered) {
-    const chosen = (document.getElementById('reg-group-' + rideId) || {}).value || ''
+    const chosen = (document.getElementById('reg-group-' + rideId) || document.getElementById('home-reg-group-' + rideId) || {}).value || ''
     const built = globalThis.PaceCore ? PaceCore.buildRegistration({
       rideId,
       groupId: chosen,
@@ -2457,6 +2609,14 @@ async function saveRide() {
     payload.cancelled = false
     const routeId = document.getElementById('ride-route').value
     if (routeId) payload.route_id = routeId
+  }
+  if (schemaCaps.category) {
+    const cat = document.getElementById('ride-category')
+    payload.category = PaceCore.normalizeCategory(cat && cat.value)
+    payload.pacing_guide = payload.category === 'challenge' ? document.getElementById('ride-pacing').value.trim() : ''
+    payload.supply_points = payload.category === 'challenge' ? document.getElementById('ride-supply').value.trim() : ''
+    payload.cutoff_times = payload.category === 'challenge' ? document.getElementById('ride-cutoff').value.trim() : ''
+    payload.gear_list = payload.category === 'challenge' ? document.getElementById('ride-gear').value.trim() : ''
   }
   const inserted = await db.from('rides').insert(payload).select('id')
   btn.disabled = false
@@ -2733,6 +2893,7 @@ function onGlobalClick(e) {
   else if (act === 'del-gl') deleteGuideline(el.dataset.id)
   else if (act === 'edit-gl') editGuideline(el.dataset.id)
   else if (act === 'announce') openAnnouncement(el.dataset.id)
+  else if (act === 'open-ride') openRide(el.dataset.id)
   else if (act === 'announce-share') shareCurrentAnnouncement()
   else if (act === 'announce-copy') copyAnnouncementOnly()
   else if (act === 'announce-close') { const box = document.getElementById('announce'); if (box) box.hidden = true }

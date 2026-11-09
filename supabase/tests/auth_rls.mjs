@@ -296,6 +296,26 @@ check('admin can save a template without creating a ride', ok(template.status) &
 check('saving a template did not add another ride',
   (await sql(`select count(*) from public.rides where title = '週日晨騎'`)) === '0')
 
+check('existing rides default to sunday', (await sql(`select category from public.rides where id = '${RIDE_ID}'`)) === 'sunday')
+const memberCat = await api(member, 'PATCH', `/rides?id=eq.${RIDE_ID}`, { category: 'challenge', pacing_guide: '偷改' })
+check('member cannot change ride category',
+  (await sql(`select category || '|' || pacing_guide from public.rides where id = '${RIDE_ID}'`)) === 'sunday|', memberCat.text)
+const adminCat = await api(admin, 'PATCH', `/rides?id=eq.${RIDE_ID}`, {
+  category: 'challenge',
+  pacing_guide: '自己的節奏',
+  supply_points: '20 公里補水',
+  cutoff_times: '09:30 關一',
+  gear_list: '頭燈、雨衣'
+})
+check('admin can set category and challenge notes', ok(adminCat.status), adminCat.text)
+check('challenge notes were stored',
+  (await sql(`select category || '|' || pacing_guide || '|' || supply_points from public.rides where id = '${RIDE_ID}'`)) === 'challenge|自己的節奏|20 公里補水')
+const badCat = await api(admin, 'PATCH', `/rides?id=eq.${RIDE_ID}`, { category: 'secret' })
+check('unknown category is rejected', !ok(badCat.status), badCat.text)
+check('rejected category did not stick', (await sql(`select category from public.rides where id = '${RIDE_ID}'`)) === 'challenge')
+const plainRide = await api(admin, 'POST', '/rides', { title: '預設類型', date: '2026-12-21', time: '06:00', location: '愛河' }, 'return=representation')
+check('a new ride without category is sunday', ok(plainRide.status) && plainRide.json?.[0]?.category === 'sunday', plainRide.text)
+
 const mock = http.createServer((req, res) => {
   let data = ''
   req.on('data', (chunk) => { data += chunk })

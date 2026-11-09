@@ -35,10 +35,22 @@ if (!memberText.includes('阿揚') || !memberDoc.getElementById('ride-list').tex
   process.exit(1)
 }
 const hero = memberDoc.getElementById('next-ride').textContent
-if (!hero.includes('週日晨騎') || !hero.includes('已報名') || !hero.includes('A 組')) {
-  console.error('home did not show the next ride, signup status, and group')
+if (!hero.includes('武嶺') || !hero.includes('週日晨騎') || !hero.includes('已報名') || !hero.includes('公告')) {
+  console.error('home did not show the challenge hero and compact Sunday signup')
   process.exit(1)
 }
+if (!memberDoc.getElementById('monthly-test-hint').textContent.includes('檢定')) {
+  console.error('monthly test hint missing')
+  process.exit(1)
+}
+const fallback = boot('http://127.0.0.1/?demo=1&scenario=fallback')
+const fallbackDoc = await settle(fallback)
+const fallbackHome = fallbackDoc.getElementById('next-ride').textContent
+if (fallbackHome.includes('武嶺') || !fallbackHome.includes('週日晨騎') || !fallbackHome.includes('週日固定團騎')) {
+  console.error('home did not fall back to the Sunday ride')
+  process.exit(1)
+}
+fallback.window.close()
 const podium = memberDoc.getElementById('podium').textContent
 if (!podium.includes('阿揚') || podium.includes('小林')) {
   console.error('podium did not keep recent qualifiers separate from the power list')
