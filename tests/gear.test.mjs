@@ -187,6 +187,58 @@ test('mileage sheet asks for a bike or wheelset only when there is more than one
   assert.equal(bikes.showWheelsets, false)
 })
 
+test('strava import auto-assigns one setup, asks which bike otherwise, and suggests a name match', () => {
+  const one = G.planStravaActivity({
+    sport: 'Ride',
+    bikes: [{ id: 'b', archived: false }],
+    wheelsets: [{ id: 'w', bike_id: 'b', mounted: true }]
+  })
+  assert.equal(one.action, 'assign')
+  assert.equal(one.bikeId, 'b')
+  assert.equal(one.wheelsetId, 'w')
+  assert.equal(G.planStravaActivity({
+    sport: 'GravelRide', bikes: [{ id: 'b', archived: false }], wheelsets: [{ id: 'w', bike_id: 'b' }]
+  }).action, 'assign')
+  assert.equal(G.planStravaActivity({ sport: 'Run', bikes: [{ id: 'b' }], wheelsets: [] }).action, 'ignore')
+  assert.equal(G.planStravaActivity({ sport: 'Swim', bikes: [], wheelsets: [] }).action, 'ignore')
+  const indoor = G.planStravaActivity({
+    sport: 'VirtualRide',
+    bikes: [{ id: 'b', archived: false }],
+    wheelsets: [{ id: 'w', bike_id: 'b', mounted: true }]
+  })
+  assert.equal(indoor.action, 'pending')
+  assert.equal(indoor.askChain, true)
+  assert.equal(indoor.notice, '這次騎哪台？')
+  const pending = G.planStravaActivity({
+    sport: 'MountainBikeRide',
+    bikes: [{ id: 'b1', archived: false }, { id: 'b2', archived: false, strava_gear_id: 'g9' }],
+    wheelsets: [
+      { id: 'w1', bike_id: 'b1', mounted: true },
+      { id: 'w2', bike_id: 'b2', mounted: true },
+      { id: 'w3', bike_id: 'b2', mounted: false }
+    ],
+    lastBikeId: 'b1',
+    lastWheelId: 'w1'
+  })
+  assert.equal(pending.action, 'pending')
+  assert.equal(pending.bikeId, 'b1')
+  assert.equal(pending.wheelsetId, 'w1')
+  const matched = G.planStravaActivity({
+    sport: 'EBikeRide',
+    gearId: 'g9',
+    bikes: [{ id: 'b1', archived: false }, { id: 'b2', archived: false, strava_gear_id: 'g9' }],
+    wheelsets: [{ id: 'w2', bike_id: 'b2', mounted: true }]
+  })
+  assert.equal(matched.action, 'assign')
+  assert.equal(matched.bikeId, 'b2')
+  const suggested = G.suggestStravaBikes(
+    [{ id: 'b', name: 'Madone SLR', brand: 'Trek', archived: false }],
+    [{ id: 's1', name: 'madone slr' }, { id: 's2', name: 'Emonda' }]
+  )
+  assert.equal(suggested[0].stravaGearId, 's1')
+  assert.equal(suggested[0].suggested, true)
+})
+
 test('strava import only keeps bike sports and auto-assigns a single setup', () => {
   assert.equal(G.classifyStravaSport('Ride').action, 'import')
   assert.equal(G.classifyStravaSport('GravelRide').indoor, false)

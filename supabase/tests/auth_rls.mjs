@@ -394,6 +394,68 @@ const foreignWheel = await api(member, 'POST', '/mileage_logs', {
 })
 check('a wheelset on the same bike is accepted', ok(foreignWheel.status), foreignWheel.text)
 
+check('anon and members have no privilege on strava tokens',
+  (await sql(`select has_table_privilege('anon', 'private.strava_tokens', 'select')::text`)) === 'false'
+  && (await sql(`select has_table_privilege('authenticated', 'private.strava_tokens', 'select')::text`)) === 'false'
+  && (await sql(`select has_table_privilege('authenticated', 'private.strava_oauth_states', 'select')::text`)) === 'false'
+  && (await sql(`select has_function_privilege('authenticated', 'public.strava_backend(text,jsonb)', 'execute')::text`)) === 'false'
+  && (await sql(`select has_function_privilege('anon', 'public.strava_backend(text,jsonb)', 'execute')::text`)) === 'false'
+  && (await sql(`select has_function_privilege('service_role', 'public.strava_backend(text,jsonb)', 'execute')::text`)) === 'true')
+const memberRpc = await api(member, 'POST', '/rpc/strava_backend', { op: 'get_token', payload: { line_user_id: A } })
+check('a member cannot call the strava backend', !ok(memberRpc.status) && !memberRpc.text.includes('secret-access'), memberRpc.text)
+const anonRpc = await api(anon, 'POST', '/rpc/strava_backend', { op: 'get_token', payload: {} })
+check('anon cannot call the strava backend', !ok(anonRpc.status), anonRpc.text)
+const service = sign({ role: 'service_role' })
+const saved = await api(service, 'POST', '/rpc/strava_backend', {
+  op: 'put_token',
+  payload: {
+    line_user_id: A, athlete_id: 4242, access_token: 'secret-access', refresh_token: 'secret-refresh',
+    expires_at: '2030-01-01T00:00:00Z', scope: 'activity:read_all,profile:read_all'
+  }
+})
+check('service role can store a strava token', ok(saved.status), saved.text)
+const hiddenToken = await api(member, 'GET', '/strava_tokens?select=access_token')
+check('the token table is not exposed to a member', !ok(hiddenToken.status) && !hiddenToken.text.includes('secret-access'), hiddenToken.text)
+check('the token row exists only in the private schema',
+  (await sql(`select athlete_id::text from private.strava_tokens where line_user_id = '${A}'`)) === '4242')
+const beforeOdo = Number(await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`))
+const beforeWheel = Number(await sql(`select odometer_km::int from public.wheelsets where id = '${wheelId}'`))
+const firstApply = await api(service, 'POST', '/rpc/strava_backend', {
+  op: 'apply',
+  payload: {
+    line_user_id: A, external_id: '99', sport_type: 'Ride', name: '河濱', occurred_on: '2026-11-08',
+    distance_km: 10, is_indoor: false, ask_chain: false, assign: true,
+    bike_id: bikeId, wheelset_id: wheelId, count_indoor: false
+  }
+})
+check('a strava ride auto-assigns onto the matched bike', ok(firstApply.status) && firstApply.json?.status === 'assigned', firstApply.text)
+const secondApply = await api(service, 'POST', '/rpc/strava_backend', {
+  op: 'apply',
+  payload: {
+    line_user_id: A, external_id: '99', sport_type: 'Ride', name: '河濱', occurred_on: '2026-11-08',
+    distance_km: 16, is_indoor: false, ask_chain: false, assign: true,
+    bike_id: bikeId, wheelset_id: wheelId, count_indoor: false
+  }
+})
+check('the same strava activity updates distance instead of adding another ride',
+  ok(secondApply.status) && secondApply.json?.status === 'updated'
+  && (await sql(`select count(*) from public.mileage_logs where external_id = '99'`)) === '1'
+  && (await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`)) === String(beforeOdo + 16)
+  && (await sql(`select odometer_km::int from public.wheelsets where id = '${wheelId}'`)) === String(beforeWheel + 16),
+  secondApply.text)
+const pendingApply = await api(service, 'POST', '/rpc/strava_backend', {
+  op: 'apply',
+  payload: {
+    line_user_id: A, external_id: '100', sport_type: 'VirtualRide', name: '室內', occurred_on: '2026-11-09',
+    distance_km: 12, is_indoor: true, ask_chain: true, assign: false, bike_id: bikeId, wheelset_id: '', count_indoor: false
+  }
+})
+check('an indoor strava ride stays pending and does not move the odometer',
+  ok(pendingApply.status) && pendingApply.json?.status === 'pending'
+  && (await sql(`select status || '|' || ask_chain::text from public.pending_activities where external_id = '100'`)) === 'pending|true'
+  && (await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`)) === String(beforeOdo + 16),
+  pendingApply.text)
+
 const mock = http.createServer((req, res) => {
   let data = ''
   req.on('data', (chunk) => { data += chunk })

@@ -1,6 +1,9 @@
 const SUPABASE_URL = 'https://yvgjaljdxmsmtljcmemp.supabase.co'
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2Z2phbGpkeG1zbXRsamNtZW1wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMTExMDYsImV4cCI6MjA5NzY4NzEwNn0.Bpfwwf_MfG_foTVk1oc3tKf6oBP7_ShRM1Nu0hR-Pz0'
 const LIFF_ID = '2010470481-aY3CdaJS'
+const STRAVA_CLIENT_ID = '295868'
+const STRAVA_REDIRECT_URI = 'https://cycling-power.vercel.app/?strava=callback'
+const STRAVA_SCOPE = 'activity:read_all,profile:read_all'
 const AQICN_TOKEN = 'f15e708e4ce8001151a24716eebf17567d06256c'
 const CACHE_TTL = 30 * 60 * 1000
 const WKG_SCALE = 5.5
@@ -35,6 +38,16 @@ const ZONE_META = [
 ]
 
 const params = new URLSearchParams(location.search)
+function stashStravaCallback() {
+  try {
+    if (params.get('strava') !== 'callback') return
+    const code = params.get('code') || ''
+    const state = params.get('state') || ''
+    const error = params.get('error') || ''
+    if ((code && state) || error) sessionStorage.setItem('pace-strava-oauth', JSON.stringify({ code, state, error }))
+  } catch (e) { /* 無痕模式不能暫存時，網址上的 code 仍會在登入後用到 */ }
+}
+stashStravaCallback()
 const DEMO = params.get('demo') === '1'
 const DEMO_ADMIN = DEMO && params.get('admin') === '1'
 
@@ -65,6 +78,7 @@ let gearSheet = ''
 let gearBikeId = ''
 let gearPartId = ''
 let gearAdvanced = false
+let stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
 let rideState = { rides: [], regs: [], groups: [], atts: [], routes: [], templates: [], templateGroups: [] }
 let rankingCtx = { rides: [], attendances: [], error: null }
 let publishLock = false
@@ -1076,17 +1090,18 @@ function openRequestedPanel() {
     gearSheet = ''
     renderGear()
   }
-  if (open === 'gear' || open === 'garage' || open === 'add-bike' || open === 'add' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain' || open === 'mileage' || open === 'wax' || open === 'advanced') {
+  if (open === 'gear' || open === 'garage' || open === 'add-bike' || open === 'add' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain' || open === 'mileage' || open === 'wax' || open === 'advanced' || open === 'strava-connected' || open === 'strava-pending') {
     switchTab('profile')
     gearOpen = true
     gearBikeId = gearState.bikes[0] ? gearState.bikes[0].id : ''
     const wax = gearState.components.find(part => part.kind === 'chain_wax' && part.bike_id === gearBikeId)
-    gearPartId = wax ? wax.id : ''
+    gearPartId = open === 'strava-pending' ? 'pend-1' : (wax ? wax.id : '')
     gearAdvanced = open === 'advanced' || open === 'basis'
     gearSheet = (open === 'mileage') ? 'mileage'
       : (open === 'wax' || open === 'advanced' || open === 'chain' || open === 'basis') ? 'part'
       : (open === 'add' || open === 'add-bike') ? 'add'
-      : (open === 'wheels') ? 'wheels' : ''
+      : (open === 'wheels') ? 'wheels'
+      : (open === 'strava-pending') ? 'strava-ride' : ''
     renderGear()
   }
   if (open === 'announce') {
@@ -1571,6 +1586,7 @@ async function init() {
     const tab = params.get('tab')
     if (tab && document.getElementById('tab-' + tab)) switchTab(tab)
     openRequestedPanel()
+    if (!DEMO) finishStravaOAuth()
   } catch (e) {
     console.error(e)
     const el = document.querySelector('.loading-text')
@@ -1909,6 +1925,7 @@ async function loadGear() {
     components: parts.data || [],
     replacements: history.error ? [] : (history.data || [])
   }
+  await loadStravaLink()
 }
 function gearDueCount() {
   if (!globalThis.PaceGear || !schemaCaps.gear) return []
@@ -1982,6 +1999,118 @@ function bikeCard(bike, today) {
     <button class="cancel-btn" type="button" data-act="gear-wheels" data-id="${esc(bike.id)}">換輪組</button>
   </article>`
 }
+function demoStrava() {
+  if (stravaLink.demoReady) return stravaLink
+  const open = params.get('open')
+  const connected = open === 'strava-connected' || open === 'strava-pending'
+  return {
+    connected,
+    demoReady: true,
+    gear: connected ? [
+      { id: 'b-madone', name: 'Madone SLR Gen 8' },
+      { id: 'b-emonda', name: 'Emonda SL' }
+    ] : [],
+    pending: open === 'strava-pending' ? [{
+      id: 'pend-1',
+      external_id: 'pend-1',
+      occurred_on: shiftDate(taipeiToday(), -2),
+      distance_km: 42,
+      is_indoor: false,
+      ask_chain: false,
+      status: 'pending',
+      bike_id: 'bike-madone',
+      wheelset_id: 'wheel-aero',
+      name: '河濱'
+    }] : []
+  }
+}
+async function loadStravaLink() {
+  if (DEMO) { stravaLink = demoStrava(); return }
+  const pending = await db.from('pending_activities').select('*').eq('status', 'pending')
+  stravaLink.pending = pending.error ? stravaLink.pending : (pending.data || [])
+  try {
+    const token = lineSession && lineSession.token
+    if (!token) return
+    const headers = { authorization: 'Bearer ' + token, apikey: SUPABASE_KEY, 'content-type': 'application/json' }
+    const status = await fetch(SUPABASE_URL + '/functions/v1/strava-auth', {
+      method: 'POST', headers, body: JSON.stringify({ action: 'status' })
+    })
+    if (!status.ok) return
+    const body = await status.json()
+    stravaLink.connected = body.connected === true
+    if (!stravaLink.connected) { stravaLink.gear = []; return }
+    const bikes = await fetch(SUPABASE_URL + '/functions/v1/strava-auth', {
+      method: 'POST', headers, body: JSON.stringify({ action: 'bikes' })
+    })
+    if (!bikes.ok) return
+    const listed = await bikes.json()
+    stravaLink.gear = listed.bikes || []
+  } catch (e) { /* 函式還沒部署時，車庫仍可手動記里程 */ }
+}
+async function stravaAction(action, extra) {
+  const token = await refreshLineSession(false)
+  if (!token) return null
+  const res = await fetch(SUPABASE_URL + '/functions/v1/strava-auth', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + token, apikey: SUPABASE_KEY, 'content-type': 'application/json' },
+    body: JSON.stringify(Object.assign({ action }, extra || {}))
+  })
+  const body = await res.json().catch(() => ({}))
+  return { ok: res.ok, body }
+}
+function stravaSection(bikes) {
+  const pending = (stravaLink.pending || []).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
+  if (!stravaLink.connected) {
+    return `<button class="cancel-btn" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect">連結 Strava</button>`
+  }
+  const suggestions = PaceGear.suggestStravaBikes(bikes, stravaLink.gear)
+  const maps = bikes.map(bike => {
+    const picked = bike.strava_gear_id || ((suggestions.find(row => row.bikeId === bike.id) || {}).stravaGearId) || ''
+    const options = ['<option value="">不對應</option>'].concat((stravaLink.gear || []).map(gear =>
+      `<option value="${esc(String(gear.id))}" ${String(gear.id) === String(picked) ? 'selected' : ''}>${esc(gear.name)}</option>`
+    ))
+    return `<div class="form-row"><label for="strava-map-${esc(bike.id)}">${esc(bike.name)}</label><select id="strava-map-${esc(bike.id)}" data-id="${esc(bike.id)}" onchange="saveStravaMap(this)">${options.join('')}</select></div>`
+  }).join('')
+  const rides = pending.map(row => {
+    const when = PaceGear.formatChainDate(row.occurred_on)
+    return `<button class="gear-line" type="button" data-act="strava-ride" data-id="${esc(row.id)}">
+      <span class="gear-line-copy"><span class="gear-line-top"><span class="gear-line-name">${esc(when)} · ${esc(String(row.distance_km))} km</span><span class="gear-line-meta">這次騎哪台？</span></span>
+      ${row.name ? `<span class="gear-line-sub">${esc(row.name)}</span>` : ''}${row.is_indoor ? '<span class="gear-line-sub">室內</span>' : ''}</span></button>`
+  }).join('')
+  return `<section class="strava-card">
+    <div class="wheel-head"><b>已連結 Strava</b>${pending.length ? `<span class="garage-due">${pending.length}</span>` : ''}</div>
+    ${rides}
+    <div class="strava-actions">
+      <button class="cancel-btn" type="button" data-act="strava-sync">立即同步</button>
+      <button class="cancel-btn" type="button" data-act="strava-disconnect">中斷連結</button>
+    </div>
+    <h3>對應你的車</h3>
+    ${maps || '<p class="field-help">Strava 上還沒有車可以對應。</p>'}
+  </section>`
+}
+function stravaRideSheet() {
+  const ride = (stravaLink.pending || []).find(row => row.id === gearPartId)
+  if (!ride) return ''
+  const bikes = gearBikes()
+  const bikeId = ride.bike_id && bikes.some(row => row.id === ride.bike_id) ? ride.bike_id : ((bikes[0] && bikes[0].id) || '')
+  const wheels = gearState.wheelsets.filter(row => row.bike_id === bikeId)
+  const wheelId = ride.wheelset_id && wheels.some(row => row.id === ride.wheelset_id)
+    ? ride.wheelset_id
+    : ((wheels.find(row => row.mounted) || wheels[0] || {}).id || '')
+  const bikeField = bikes.length > 1
+    ? `<div class="form-row"><label for="log-bike">哪一台車</label><select id="log-bike">${bikes.map(row => `<option value="${esc(row.id)}" ${row.id === bikeId ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}</select></div>`
+    : `<input id="log-bike" type="hidden" value="${esc(bikeId)}">`
+  const wheelField = wheels.length > 1
+    ? `<div class="form-row" id="log-wheel-row"><label for="log-wheel">這次用的輪組</label><select id="log-wheel">${wheels.map(row => `<option value="${esc(row.id)}" ${row.id === wheelId ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}</select></div>`
+    : `<input id="log-wheel" type="hidden" value="${esc(wheelId)}">`
+  const ask = ride.ask_chain === true || ride.is_indoor === true
+  return `${sheetHead('這次騎哪台？')}
+    <p class="sheet-last">${esc(PaceGear.formatChainDate(ride.occurred_on))} · ${esc(String(ride.distance_km))} km${ride.is_indoor ? ' · 室內' : ''}</p>
+    ${bikeField}
+    ${wheelField}
+    ${ask ? `<label class="check-line"><input id="log-chain" type="checkbox"> 也計入車架和鍊條上蠟</label><p class="field-help">輪組、外胎和補胎液仍然不計。</p>` : ''}
+    <button class="save-btn sheet-primary" type="button" data-act="strava-confirm" data-id="${esc(ride.id)}">記入</button>`
+}
 function garageHtml() {
   const bikes = gearBikes()
   if (!bikes.length) {
@@ -1996,9 +2125,9 @@ function garageHtml() {
   return `<button class="text-back" type="button" data-act="gear-close">${icon('chevron-left', 16)}我的資料</button>
     <h2>我的車庫</h2>
     <div class="garage-actions"><button class="save-btn" type="button" data-act="gear-mileage">＋ 新增里程</button></div>
+    ${stravaSection(bikes)}
     ${bikes.map(bike => bikeCard(bike, today)).join('')}
-    <button class="cancel-btn" type="button" data-act="gear-add">新增一台車</button>
-    <button class="cancel-btn strava-soon" type="button" disabled>連結 Strava（即將推出）</button>`
+    <button class="cancel-btn" type="button" data-act="gear-add">新增一台車</button>`
 }
 function renderGear() {
   const home = document.getElementById('profile-home')
@@ -2032,11 +2161,13 @@ function renderGearSheet() {
   else if (gearSheet === 'mileage') body.innerHTML = mileageSheet()
   else if (gearSheet === 'wheels') body.innerHTML = wheelsSheet()
   else if (gearSheet === 'part') body.innerHTML = partSheet()
+  else if (gearSheet === 'strava-ride') body.innerHTML = stravaRideSheet()
   else { sheet.hidden = true; body.innerHTML = '' }
   const indoor = document.getElementById('log-indoor')
   if (indoor) indoor.addEventListener('change', gearIndoorChanged)
   const bikePick = document.getElementById('log-bike')
-  if (bikePick) bikePick.addEventListener('change', gearBikeChanged)
+  if (bikePick && gearSheet === 'mileage') bikePick.addEventListener('change', gearBikeChanged)
+  if (bikePick && gearSheet === 'strava-ride') bikePick.addEventListener('change', stravaBikeChanged)
 }
 function addBikeSheet() {
   return `${sheetHead('新增一台車')}
@@ -2134,6 +2265,112 @@ function gearBikeChanged() {
   if (document.getElementById('log-date')) document.getElementById('log-date').value = date
   if (document.getElementById('log-indoor')) document.getElementById('log-indoor').checked = indoor
   gearIndoorChanged()
+}
+function stravaBikeChanged() {
+  const ride = (stravaLink.pending || []).find(row => row.id === gearPartId)
+  if (!ride) return
+  ride.bike_id = document.getElementById('log-bike').value
+  const wheels = gearState.wheelsets.filter(row => row.bike_id === ride.bike_id)
+  ride.wheelset_id = (wheels.find(row => row.mounted) || wheels[0] || {}).id || null
+  renderGearSheet()
+}
+async function saveStravaMap(select) {
+  const id = select.dataset.id
+  const value = select.value || null
+  const res = await db.from('bikes').update({ strava_gear_id: value }).eq('id', id)
+  if (res.error) { showToast('沒有對上'); return }
+  const bike = gearState.bikes.find(row => row.id === id)
+  if (bike) bike.strava_gear_id = value
+  showToast('已對應')
+}
+async function connectStrava() {
+  if (DEMO) { showToast('示範不會連到 Strava'); return }
+  const result = await stravaAction('start')
+  const url = result && result.body && result.body.url
+  if (!result || !result.ok || !url || !url.includes('client_id=' + STRAVA_CLIENT_ID) || !decodeURIComponent(url).includes(STRAVA_REDIRECT_URI) || !decodeURIComponent(url).includes(STRAVA_SCOPE)) {
+    showToast('現在無法連結')
+    return
+  }
+  location.assign(url)
+}
+async function syncStrava() {
+  if (DEMO) { showToast('示範不會跟 Strava 同步'); return }
+  const result = await stravaAction('sync')
+  if (!result || !result.ok) { showToast('沒有同步'); return }
+  showToast('已同步')
+  await loadGear()
+  renderGear()
+}
+async function disconnectStrava() {
+  if (DEMO) {
+    stravaLink = { connected: false, gear: [], pending: [], demoReady: true }
+    showToast('已中斷連結')
+    renderGear()
+    return
+  }
+  const result = await stravaAction('disconnect')
+  if (!result || !result.ok) { showToast('沒有中斷'); return }
+  stravaLink = { connected: false, gear: [], pending: stravaLink.pending, demoReady: false }
+  showToast('已中斷連結')
+  await loadStravaLink()
+  renderGear()
+}
+async function confirmStravaRide(id) {
+  const ride = (stravaLink.pending || []).find(row => row.id === id)
+  if (!ride) return
+  const bikeId = document.getElementById('log-bike').value
+  const wheelId = document.getElementById('log-wheel') ? document.getElementById('log-wheel').value : ''
+  const indoor = ride.is_indoor === true
+  const countChain = !!(document.getElementById('log-chain') && document.getElementById('log-chain').checked)
+  const km = Number(ride.distance_km)
+  if (!(km > 0) || !bikeId) { showToast('這筆不能記入'); return }
+  const entry = {
+    line_user_id: myProfile.line_user_id,
+    ride_date: String(ride.occurred_on).slice(0, 10),
+    km,
+    bike_id: bikeId,
+    wheelset_id: indoor ? null : (wheelId || null),
+    is_indoor: indoor,
+    count_indoor_drivetrain: indoor && countChain,
+    external_source: 'strava',
+    external_id: String(ride.external_id || ride.id)
+  }
+  const inserted = await db.from('mileage_logs').insert(entry).select('id')
+  if (inserted.error) { showToast('沒有記入'); return }
+  const logId = insertedId(inserted)
+  await db.from('pending_activities').update({
+    status: 'assigned', bike_id: bikeId, wheelset_id: indoor ? null : (wheelId || null), mileage_log_id: logId
+  }).eq('id', id)
+  if (DEMO) {
+    const applied = PaceGear.applyMileage(gearState, entry)
+    if (applied.ok && applied.applied !== 'none') {
+      for (const bike of applied.bikes) await db.from('bikes').update({ odometer_km: bike.odometer_km }).eq('id', bike.id)
+      for (const wheel of applied.wheelsets) await db.from('wheelsets').update({ odometer_km: wheel.odometer_km }).eq('id', wheel.id)
+      for (const part of applied.components) await db.from('gear_components').update({ accumulated_km: part.accumulated_km }).eq('id', part.id)
+    }
+    ride.status = 'assigned'
+  }
+  showToast('已記入')
+  gearSheet = ''
+  await loadGear()
+  renderGear()
+  renderGearReminder()
+}
+async function finishStravaOAuth() {
+  let saved = null
+  try { saved = JSON.parse(sessionStorage.getItem('pace-strava-oauth') || 'null') } catch (e) { saved = null }
+  if (!saved && params.get('strava') === 'callback') {
+    saved = { code: params.get('code') || '', state: params.get('state') || '', error: params.get('error') || '' }
+  }
+  if (!saved || (!saved.code && !saved.error)) return
+  try { sessionStorage.removeItem('pace-strava-oauth') } catch (e) { /* ignore */ }
+  if (saved.error || !saved.code || !saved.state) { showToast('沒有完成連結'); return }
+  const result = await stravaAction('exchange', { code: saved.code, state: saved.state })
+  if (!result || !result.ok) { showToast('連結沒有完成'); return }
+  showToast('已連結 Strava')
+  gearOpen = true
+  await loadGear()
+  renderGear()
 }
 function openGarage() {
   switchTab('profile')
@@ -3405,6 +3642,11 @@ function onGlobalClick(e) {
   else if (act === 'gear-reset') resetGearPart(el.dataset.id)
   else if (act === 'gear-chain') replaceChain(el.dataset.id)
   else if (act === 'gear-interval') saveGearInterval(el.dataset.id)
+  else if (act === 'strava-connect') connectStrava()
+  else if (act === 'strava-sync') syncStrava()
+  else if (act === 'strava-disconnect') disconnectStrava()
+  else if (act === 'strava-ride') { gearPartId = el.dataset.id; gearSheet = 'strava-ride'; renderGearSheet() }
+  else if (act === 'strava-confirm') confirmStravaRide(el.dataset.id)
 }
 function onTouchStart(e) {
   if (e.touches.length !== 1) return

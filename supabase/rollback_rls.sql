@@ -37,6 +37,7 @@ drop policy if exists ride_groups_write on public.ride_groups;
 drop policy if exists ride_templates_all on public.ride_templates;
 drop policy if exists ride_template_groups_all on public.ride_template_groups;
 
+drop trigger if exists zz_gear_revise_mileage on public.mileage_logs;
 drop trigger if exists zz_gear_apply_mileage on public.mileage_logs;
 drop trigger if exists gear_single_mounted on public.wheelsets;
 drop trigger if exists gear_guard_last_wheelset on public.wheelsets;
@@ -49,6 +50,9 @@ drop trigger if exists gear_stamp_mileage on public.mileage_logs;
 drop trigger if exists gear_stamp_components on public.gear_components;
 drop trigger if exists gear_stamp_wheelsets on public.wheelsets;
 drop trigger if exists gear_stamp_bikes on public.bikes;
+drop function if exists public.strava_backend(text, jsonb);
+drop function if exists private.gear_revise_mileage();
+drop function if exists private.gear_shift_km(text, uuid, uuid, numeric, boolean, boolean);
 drop function if exists private.gear_apply_mileage();
 drop function if exists private.gear_single_mounted();
 drop function if exists private.gear_guard_last_wheelset();

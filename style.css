@@ -817,7 +817,14 @@ input[type=range]::-moz-range-thumb {
 }
 .garage-empty h2 { font-size: 20px; margin-bottom: 8px; }
 .garage-empty p { color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
-.strava-soon { opacity: .65; margin-top: 8px; }
+.strava-card {
+  margin: 0 0 12px; padding: 12px; border-radius: 16px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, .03);
+}
+.strava-card h3 { font-size: 14px; margin: 12px 0 6px; }
+.strava-actions { display: flex; gap: 8px; margin-top: 8px; }
+.strava-actions .cancel-btn { flex: 1; width: auto; }
+.strava-card select { width: 100%; }
 .gear-nav-badge {
   position: absolute; top: 6px; right: 18%; min-width: 16px; height: 16px; padding: 0 4px;
   border-radius: 99px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700;

@@ -1,4 +1,7 @@
 -- 本機測試資料。line_user_id 的形狀與 LINE 使用者 ID 相同（U + 32 hex）。
+delete from private.strava_oauth_states;
+delete from private.strava_tokens;
+
 truncate table
   public.chain_replacements,
   public.mileage_logs,
