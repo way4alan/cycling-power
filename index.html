@@ -230,14 +230,18 @@
         </div>
 
         <div id="tab-profile" class="tab-panel">
+          <div id="profile-home">
           <div id="profile-hero"></div>
+          <button class="garage-entry" id="garage-entry" type="button" data-act="gear-open-screen" hidden>
+            <span class="left"><span data-icon="bike" data-size="18"></span>我的車庫</span>
+            <span class="garage-entry-side"><span class="garage-due" id="garage-due" hidden></span><span class="go-next" data-icon="chevron-left" data-size="16"></span></span>
+          </button>
           <div id="profile-stats"></div>
           <div class="profile-split">
             <div id="attendance-progress"></div>
             <div id="zone-visual"></div>
           </div>
           <div id="badge-wall"></div>
-          <section id="gear-garage" class="card gear-garage" hidden></section>
           <div id="admin-entry"></div>
           <div class="card form-card" id="profile-form">
             <h2 class="pace-section-title">編輯資料</h2>
@@ -281,6 +285,8 @@
             </div>
             <button class="save-btn" type="button" onclick="saveProfile()"><span data-icon="check" data-size="18"></span>儲存更新</button>
           </div>
+          </div>
+          <section id="gear-garage" class="gear-garage" hidden></section>
         </div>
 
         <div id="tab-admin" class="tab-panel">
@@ -348,6 +354,10 @@
       <button class="cancel-btn" id="announce-close" type="button" data-act="announce-close">關閉</button>
     </div>
   </div>
+</div>
+<div id="gear-sheet" class="gear-sheet" hidden>
+  <button class="gear-sheet-backdrop" type="button" data-act="gear-sheet-close" aria-label="關閉"></button>
+  <div class="gear-sheet-panel" id="gear-sheet-body" role="dialog" aria-modal="true"></div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div id="confirm" class="confirm" hidden>
