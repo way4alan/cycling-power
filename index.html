@@ -105,6 +105,7 @@
               <div class="wave-rule" aria-hidden="true"></div>
               <div class="section-head">
                 <h2>完整排名</h2>
+                <p id="monthly-test-hint" class="monthly-hint" hidden></p>
                 <div class="cat-legend">
                   <span><i class="dot a"></i>A ≥ 4.0</span>
                   <span><i class="dot b"></i>B ≥ 3.2</span>
@@ -160,6 +161,21 @@
           <div id="ride-form" class="card form-card" hidden>
             <h2 class="pace-section-title">新增團騎公告</h2>
             <div class="form-row"><label for="ride-title">活動標題</label><input type="text" id="ride-title" placeholder="例如：週日晨騎"></div>
+            <div class="form-row" id="ride-category-row">
+              <label for="ride-category">團騎類型</label>
+              <select id="ride-category" onchange="syncChallengeFields()">
+                <option value="sunday">週日固定團騎</option>
+                <option value="challenge">年度挑戰</option>
+                <option value="monthly">每月檢定</option>
+              </select>
+              <p class="field-help">年度挑戰一年至少四場，例如武嶺、阿里山。只要還有尚未出發的年度挑戰，首頁主卡就是日期最近的那一場，不論多遠。完全沒有時才改顯示週日團騎。每月檢定只在排名區提示日期。</p>
+            </div>
+            <div id="challenge-fields" hidden>
+              <div class="form-row"><label for="ride-pacing">配速建議（選填）</label><textarea id="ride-pacing" rows="2" placeholder="例如：前段自己的節奏，不要在坡底硬跟"></textarea></div>
+              <div class="form-row"><label for="ride-supply">補給點（選填）</label><textarea id="ride-supply" rows="2" placeholder="例如：20 公里便利商店、山頂補水"></textarea></div>
+              <div class="form-row"><label for="ride-cutoff">關門時間（選填）</label><textarea id="ride-cutoff" rows="2" placeholder="例如：09:30 過不了中繼就原路下"></textarea></div>
+              <div class="form-row"><label for="ride-gear">裝備清單（選填）</label><textarea id="ride-gear" rows="2" placeholder="例如：頭燈、雨衣、備用電"></textarea></div>
+            </div>
             <div class="form-row"><label for="ride-date">日期</label><input type="date" id="ride-date"></div>
             <div class="form-row">
               <label for="ride-location1">第一集合點</label>

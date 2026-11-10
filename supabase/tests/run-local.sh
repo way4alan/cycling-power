@@ -53,6 +53,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261104164831_rls_lockdown.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261106170000_participation.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261106170000_participation.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261109150000_ride_categories.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261109150000_ride_categories.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
