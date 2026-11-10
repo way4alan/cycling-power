@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1'
 import {
   authorizeUrl,
   classifySport,
+  deriveWebhookVerifyToken,
   devSignUser,
   handleStravaAuth,
   handleStravaWebhook,
@@ -212,6 +213,33 @@ Deno.test('exchange stores a connection without returning the token, and a secon
   const statusBody = await status.json()
   assertEquals(statusBody.connected, true)
   assertEquals('access_token' in statusBody, false)
+})
+
+Deno.test('webhook verify token is derived from the client secret when unset', async () => {
+  assertEquals(await deriveWebhookVerifyToken('strava-client-secret-not-real'), '63a96339967a2e1e09506604ae3c24c1')
+  const derivedEnv = {
+    get: (name: string) => ({
+      JWT_SECRET: SECRET,
+      STRAVA_CLIENT_SECRET: STRAVA_SECRET,
+      STRAVA_CLIENT_ID: '295868',
+    }[name]),
+  }
+  const store = memoryStore()
+  const ok = await handleStravaWebhook(
+    new Request('https://example.test/strava-webhook?hub.mode=subscribe&hub.verify_token=63a96339967a2e1e09506604ae3c24c1&hub.challenge=derived'),
+    derivedEnv,
+    jsonFetch({}),
+    store,
+  )
+  assertEquals(ok.status, 200)
+  assertEquals(await ok.json(), { 'hub.challenge': 'derived' })
+  const bad = await handleStravaWebhook(
+    new Request('https://example.test/strava-webhook?hub.mode=subscribe&hub.verify_token=not-the-derived-token&hub.challenge=derived'),
+    derivedEnv,
+    jsonFetch({}),
+    store,
+  )
+  assertEquals(bad.status, 403)
 })
 
 Deno.test('webhook validation echoes the challenge only for the verify token', async () => {

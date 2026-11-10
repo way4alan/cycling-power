@@ -6,17 +6,14 @@ Client ID `295868` 可以寫在網站裡。Client secret 只放在 Supabase Edge
 
 ## 需要設定的秘密（只寫名稱）
 
-在 Supabase → Edge Functions → Secrets，三個都要有：
+在 Supabase → Edge Functions → Secrets，只要這兩個（已經設好即可）：
 
 - `STRAVA_CLIENT_ID` = `295868`
 - `STRAVA_CLIENT_SECRET` = Strava 應用程式的 client secret
-- `STRAVA_WEBHOOK_VERIFY_TOKEN` = 自己產生的一長串隨機文字（訂閱和 webhook 要用同一串）
+
+不要再加 `STRAVA_WEBHOOK_VERIFY_TOKEN`。`strava-webhook` 在沒有這個變數時，用 client secret 對文字 `pace-strava-webhook-v1` 做 HMAC-SHA256，取前 32 個十六進位字元。訂閱腳本用同一套算法，所以兩邊不用各存一串。
 
 函式還會用到 Supabase 本來就有的 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`JWT_SECRET`（或 `SUPABASE_JWT_SECRET`）。不用把 service role key 放進網站。
-
-本機訂閱腳本另外要：
-
-- `STRAVA_CALLBACK_URL` = `https://<project-ref>.supabase.co/functions/v1/strava-webhook`
 
 ## 1. 備份
 
@@ -40,7 +37,7 @@ SQL Editor 只貼 `supabase/migrations/20261110180000_strava_sync.sql` 再 Run�
 
 ## 4. 部署兩個函式
 
-兩個都要關掉閘道的 JWT 檢查。`strava-auth` 自己驗證 LINE 登入換來的 JWT。`strava-webhook` 是 Strava 打來的，沒有我們的 JWT，改對 `STRAVA_WEBHOOK_VERIFY_TOKEN`。
+兩個都要關掉閘道的 JWT 檢查。`strava-auth` 自己驗證 LINE 登入換來的 JWT。`strava-webhook` 是 Strava 打來的，沒有我們的 JWT，改對由 client secret 算出的驗證字串。
 
 ```bash
 supabase functions deploy strava-auth --no-verify-jwt
@@ -49,13 +46,13 @@ supabase functions deploy strava-webhook --no-verify-jwt
 
 ## 5. 建立 Strava 推播訂閱
 
-先把上面的秘密放進這個終端機的環境變數，再執行。腳本不會把 secret 印出來。
+終端機只要有 `STRAVA_CLIENT_SECRET`。`STRAVA_CLIENT_ID` 預設 `295868`。callback 預設 `https://yvgjaljdxmsmtljcmemp.supabase.co/functions/v1/strava-webhook`。腳本不會印出 secret，也不會印出算出來的驗證字串。
 
 ```bash
 node supabase/scripts/strava-subscribe.mjs
 ```
 
-它會 POST 到 `https://www.strava.com/api/v3/push_subscriptions`。callback 是第 4 步的 `strava-webhook` 網址。Strava 會先 GET 這個網址，函式要把 `hub.challenge` 原樣回去。
+它會 POST 到 `https://www.strava.com/api/v3/push_subscriptions`。Strava 會先 GET webhook 網址，函式要把 `hub.challenge` 原樣回去。
 
 授權回呼網域是 `cycling-power.vercel.app`。使用者按連結後會回到 `https://cycling-power.vercel.app/?strava=callback`。這個網址在 LINE 的內建瀏覽器也能回來；一次性 state 跟這位團員綁在一起，別人的 state 不能拿來換 token。
 

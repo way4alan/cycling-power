@@ -231,6 +231,28 @@ function clientSecret(env: EnvSource): string {
   return env.get('STRAVA_CLIENT_SECRET') || ''
 }
 
+export async function deriveWebhookVerifyToken(secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('pace-strava-webhook-v1'))
+  let hex = ''
+  for (const byte of new Uint8Array(sig)) hex += byte.toString(16).padStart(2, '0')
+  return hex.slice(0, 32)
+}
+
+export async function webhookVerifyToken(env: EnvSource): Promise<string> {
+  const explicit = env.get('STRAVA_WEBHOOK_VERIFY_TOKEN')
+  if (explicit) return explicit
+  const secret = clientSecret(env)
+  if (!secret) return ''
+  return deriveWebhookVerifyToken(secret)
+}
+
 function jwtSecret(env: EnvSource): string {
   return env.get('JWT_SECRET') || env.get('SUPABASE_JWT_SECRET') || ''
 }
@@ -467,7 +489,7 @@ export async function handleStravaWebhook(
   store: Store,
 ): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
-  const verify = env.get('STRAVA_WEBHOOK_VERIFY_TOKEN') || ''
+  const verify = await webhookVerifyToken(env)
   if (req.method === 'GET') {
     const url = new URL(req.url)
     const mode = url.searchParams.get('hub.mode')
