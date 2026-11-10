@@ -368,31 +368,29 @@ test('a failed directory read is not treated as a new member', () => {
   assert.equal(P.isMissingSchemaError({ code: '42501', message: 'permission denied' }), false)
 })
 
-test('home picks the nearest challenge inside 90 days and falls back to Sunday', () => {
+test('home uses the nearest upcoming challenge no matter how far, else Sunday', () => {
   const now = new Date('2026-11-09T02:00:00Z').getTime()
+  const farDate = P.shiftISODate('2026-11-09', 200)
   const rides = [
     { id: 'sun', category: 'sunday', date: '2026-11-15', time: '06:00', title: '週日晨騎' },
-    { id: 'near', category: 'challenge', date: '2026-12-06', time: '05:00', title: '武嶺', distance_km: 105, ascent_m: 3275 },
-    { id: 'later', category: 'challenge', date: '2026-12-20', time: '05:00', title: '阿里山' },
-    { id: 'far', category: 'challenge', date: '2027-03-01', time: '05:00', title: '合歡山' },
+    { id: 'far', category: 'challenge', date: farDate, time: '05:00', title: '武嶺', distance_km: 105, ascent_m: 3275 },
+    { id: 'later', category: 'challenge', date: P.shiftISODate('2026-11-09', 260), time: '05:00', title: '阿里山' },
     { id: 'month', category: 'monthly', date: '2026-11-22', time: '06:30', title: '11月檢定' },
-    { id: 'done', category: 'challenge', date: '2026-11-20', time: '05:00', title: '已結束', is_finished: true },
-    { id: 'cx', category: 'challenge', date: '2026-11-16', time: '05:00', title: '取消', cancelled: true }
+    { id: 'done', category: 'challenge', date: '2026-11-01', time: '05:00', title: '已結束', is_finished: true },
+    { id: 'cx', category: 'challenge', date: '2026-11-12', time: '05:00', title: '取消', cancelled: true }
   ]
   const layout = P.homeLayout(rides, now)
-  assert.equal(layout.challengeWindowDays, 90)
-  assert.equal(layout.hero.id, 'near')
+  assert.equal(layout.hero.id, 'far')
   assert.equal(layout.heroKind, 'challenge')
+  assert.equal(layout.preparation.days, 200)
+  assert.match(layout.preparation.label, /週可以準備/)
   assert.equal(layout.compactSunday.id, 'sun')
   assert.equal(layout.monthly.id, 'month')
-  assert.equal(layout.preparation.days, 27)
-  assert.match(layout.preparation.label, /週可以準備/)
-  const fallback = P.homeLayout(rides.filter(r => r.id !== 'near' && r.id !== 'later'), now)
+  assert.notEqual(layout.hero.id, 'later')
+  const fallback = P.homeLayout(rides.filter(r => r.category !== 'challenge' || r.is_finished || r.cancelled), now)
   assert.equal(fallback.hero.id, 'sun')
   assert.equal(fallback.heroKind, 'sunday-fallback')
   assert.equal(fallback.compactSunday.id, 'sun')
-  assert.notEqual(fallback.hero.id, 'far')
-  assert.notEqual(fallback.hero.id, 'month')
   const onlyMonthly = P.homeLayout([rides.find(r => r.id === 'month')], now)
   assert.equal(onlyMonthly.hero, null)
   assert.equal(onlyMonthly.monthly.id, 'month')

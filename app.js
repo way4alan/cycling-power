@@ -584,7 +584,7 @@ function renderNextRide() {
   const layout = PaceCore.homeLayout(rideState.rides || [], Date.now())
   const parts = []
   if (layout.hero) parts.push(heroCardHtml(layout.hero, layout))
-  else parts.push('<div class="card empty-state">90 天內沒有年度挑戰，也沒有即將出發的週日團騎</div>')
+  else parts.push('<div class="card empty-state">目前沒有尚未出發的年度挑戰，也沒有即將出發的週日團騎</div>')
   if (layout.compactSunday) parts.push(compactSundayHtml(layout.compactSunday))
   host.innerHTML = parts.join('')
   renderMonthlyHint(layout)
@@ -1295,7 +1295,7 @@ function createDemoDb() {
       { id: 'ride-cancel', title: '改期取消', date: day(-1), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: true, cancelled: true, created_at: now },
       { id: 'ride-future', title: '還沒騎', category: 'sunday', date: shiftDate(sunday, 14), time: '06:00', location: '愛河之心', garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now },
       {
-        id: 'ride-wuling', title: '武嶺', category: 'challenge', date: shiftDate(sunday, 21), time: '05:00',
+        id: 'ride-wuling', title: '武嶺', category: 'challenge', date: day(180), time: '05:00',
         location: '埔里｜南投縣埔里鎮', garmin_code: '', note: '示範年度挑戰',
         garmin_url: 'https://connect.garmin.com/modern/course/123456789',
         distance_km: 105, ascent_m: 3275, distance_estimated: false, ascent_estimated: false,
@@ -1306,14 +1306,14 @@ function createDemoDb() {
         is_finished: false, cancelled: false, created_at: now
       },
       {
-        id: 'ride-alishan', title: '阿里山', category: 'challenge', date: shiftDate(sunday, 70), time: '05:30',
+        id: 'ride-alishan', title: '阿里山', category: 'challenge', date: day(240), time: '05:30',
         location: '嘉義｜嘉義市', distance_km: 90, ascent_m: 2100,
         garmin_code: '', note: '', is_finished: false, cancelled: false, created_at: now
       },
       {
-        id: 'ride-far', title: '合歡山', category: 'challenge', date: shiftDate(sunday, 120), time: '05:00',
+        id: 'ride-far', title: '合歡山', category: 'challenge', date: day(300), time: '05:00',
         location: '清境｜南投縣仁愛鄉', distance_km: 80, ascent_m: 1800,
-        garmin_code: '', note: '超過 90 天，不會佔首頁主卡', is_finished: false, cancelled: false, created_at: now
+        garmin_code: '', note: '示範：比武嶺更晚，不會搶主卡', is_finished: false, cancelled: false, created_at: now
       },
       {
         id: 'ride-monthly', title: '11月檢定', category: 'monthly', date: shiftDate(sunday, 7), time: '06:30',
