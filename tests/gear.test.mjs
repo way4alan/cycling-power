@@ -128,6 +128,65 @@ test('chain replacement history keeps every change and the km ridden since the l
   assert.equal(reset.history[0].note, '磨耗 0.8%')
 })
 
+test('garage rows say how much is left and put due items first', () => {
+  assert.equal(G.remainText({
+    kind: 'chain_wax', accumulated_km: 130, km_at_last_service: 0, interval_km: 250, interval_months: null
+  }, '2026-11-10'), '剩 120 km')
+  assert.equal(G.remainText({
+    kind: 'chain_wax', accumulated_km: 250, km_at_last_service: 0, interval_km: 250, interval_months: null, last_service_date: '2020-01-01'
+  }, '2026-11-10'), '到期')
+  assert.equal(G.remainText({
+    kind: 'brake_fluid', interval_km: null, interval_months: 1, last_service_date: '2026-11-03', accumulated_km: 0
+  }, '2026-11-10'), '剩 23 天')
+  assert.equal(G.remainText({
+    kind: 'brake_pads', interval_km: null, interval_months: 1, last_service_date: '2026-09-01', accumulated_km: 0
+  }, '2026-11-10'), '已超過 40 天')
+  assert.equal(G.remainText({
+    kind: 'chain_replace', interval_km: null, interval_months: null, last_service_date: '2020-01-01'
+  }, '2026-11-10'), '依磨耗判斷')
+  const sorted = G.sortConsumables([
+    { kind: 'bar_tape', interval_km: null, interval_months: 12, last_service_date: '2026-11-01', accumulated_km: 0 },
+    { kind: 'chain_wax', interval_km: 250, interval_months: null, accumulated_km: 250, km_at_last_service: 0, last_service_date: '2026-01-01' },
+    { kind: 'brake_pads', interval_km: null, interval_months: 1, last_service_date: '2026-10-16', accumulated_km: 0 },
+    { kind: 'chain_replace', interval_km: null, interval_months: null, last_service_date: '2020-01-01' }
+  ], '2026-11-10').map(part => part.kind)
+  assert.deepEqual(sorted, ['chain_wax', 'brake_pads', 'bar_tape', 'chain_replace'])
+  assert.equal(G.actionLabel({ kind: 'chain_wax' }), '已上蠟')
+  assert.equal(G.actionLabel({ kind: 'chain_replace' }), '已更換')
+  assert.equal(G.actionLabel({ kind: 'brake_pads' }), '已檢查')
+  assert.equal(G.chainSinceText(
+    { id: 'b1', odometer_km: 2480 },
+    [{ bike_id: 'b1', replaced_on: '2026-08-12', bike_km: 2000 }]
+  ), '上次換鍊 2026/08/12・已騎 480 km')
+})
+
+test('mileage sheet asks for a bike or wheelset only when there is more than one', () => {
+  const one = G.mileagePrompt(
+    [{ id: 'b1', archived: false }],
+    [{ id: 'w1', bike_id: 'b1', mounted: true }],
+    'b1'
+  )
+  assert.equal(one.showBikes, false)
+  assert.equal(one.showWheelsets, false)
+  assert.equal(one.wheelsetId, 'w1')
+  const wheels = G.mileagePrompt(
+    [{ id: 'b1', archived: false }],
+    [{ id: 'w1', bike_id: 'b1', mounted: false }, { id: 'w2', bike_id: 'b1', mounted: true }],
+    'b1'
+  )
+  assert.equal(wheels.showBikes, false)
+  assert.equal(wheels.showWheelsets, true)
+  assert.equal(wheels.wheelsetId, 'w2')
+  const bikes = G.mileagePrompt(
+    [{ id: 'b1', archived: false }, { id: 'b2', archived: false }, { id: 'b3', archived: true }],
+    [{ id: 'w1', bike_id: 'b1', mounted: true }],
+    ''
+  )
+  assert.equal(bikes.showBikes, true)
+  assert.equal(bikes.bikeId, 'b1')
+  assert.equal(bikes.showWheelsets, false)
+})
+
 test('strava import only keeps bike sports and auto-assigns a single setup', () => {
   assert.equal(G.classifyStravaSport('Ride').action, 'import')
   assert.equal(G.classifyStravaSport('GravelRide').indoor, false)
