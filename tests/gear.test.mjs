@@ -23,16 +23,19 @@ test('a new bike starts with a factory wheelset and both consumable sets', () =>
   assert.equal(seeded.wheelset.name, '原廠輪組')
   assert.equal(seeded.wheelset.mounted, true)
   const kinds = seeded.components.map(row => row.kind).sort()
-  assert.deepEqual(kinds, ['bar_tape', 'brake_fluid', 'brake_pads', 'cassette_chainrings', 'chain', 'sealant', 'shift_cables', 'tires'])
-  const chain = seeded.components.find(row => row.kind === 'chain')
-  assert.equal(chain.interval_km, 500)
-  assert.equal(chain.interval_months, 1)
-  assert.equal(chain.reminder_kind, 'check')
+  assert.deepEqual(kinds, ['bar_tape', 'brake_fluid', 'brake_pads', 'cassette_chainrings', 'chain_replace', 'chain_wax', 'sealant', 'shift_cables', 'tires'])
+  const wax = seeded.components.find(row => row.kind === 'chain_wax')
+  const replace = seeded.components.find(row => row.kind === 'chain_replace')
+  assert.equal(wax.interval_km, 250)
+  assert.equal(wax.interval_months, null)
+  assert.equal(wax.basis, 'team')
+  assert.equal(replace.interval_km, null)
+  assert.equal(replace.interval_months, null)
   assert.equal(seeded.components.find(row => row.kind === 'tires').interval_km, null)
   assert.equal(seeded.components.find(row => row.kind === 'tires').interval_months, 36)
   assert.equal(seeded.components.find(row => row.kind === 'shift_cables').basis, 'rule_of_thumb')
   assert.equal(seeded.components.find(row => row.kind === 'sealant').wheelset_id, seeded.wheelset.id)
-  assert.equal(chain.bike_id, 'b')
+  assert.equal(wax.bike_id, 'b')
 })
 
 test('outdoor km updates the bike, chosen wheelset, and their consumables', () => {
@@ -43,7 +46,7 @@ test('outdoor km updates the bike, chosen wheelset, and their consumables', () =
   assert.equal(applied.bikes[0].odometer_km, 125)
   assert.equal(applied.wheelsets.find(row => row.id === 'w-aero').odometer_km, 65)
   assert.equal(applied.wheelsets.find(row => row.id === 'w-stock').odometer_km, 0)
-  assert.equal(applied.components.find(row => row.kind === 'chain').accumulated_km, 25)
+  assert.equal(applied.components.find(row => row.kind === 'chain_wax').accumulated_km, 25)
   assert.equal(applied.components.find(row => row.kind === 'tires' && row.wheelset_id === 'w-aero').accumulated_km, 25)
   assert.equal(applied.components.find(row => row.kind === 'tires' && row.wheelset_id === 'w-stock').accumulated_km, 0)
 })
@@ -58,11 +61,11 @@ test('indoor rides skip the wheelset unless the chain box is ticked', () => {
   const skipped = G.applyMileage(state(), { km: 30, bike_id: 'b1', is_indoor: true, count_indoor_drivetrain: false })
   assert.equal(skipped.applied, 'none')
   assert.equal(skipped.bikes[0].odometer_km, 100)
-  assert.equal(skipped.components.find(row => row.kind === 'chain').accumulated_km, 0)
+  assert.equal(skipped.components.find(row => row.kind === 'chain_wax').accumulated_km, 0)
   const counted = G.applyMileage(state(), { km: 30, bike_id: 'b1', is_indoor: true, count_indoor_drivetrain: true })
   assert.equal(counted.applied, 'drivetrain')
   assert.equal(counted.bikes[0].odometer_km, 130)
-  assert.equal(counted.components.find(row => row.kind === 'chain').accumulated_km, 30)
+  assert.equal(counted.components.find(row => row.kind === 'chain_wax').accumulated_km, 30)
   assert.equal(counted.components.find(row => row.kind === 'brake_pads').accumulated_km, 0)
   assert.equal(counted.wheelsets.find(row => row.id === 'w-stock').odometer_km, 0)
   assert.equal(counted.components.find(row => row.kind === 'sealant').accumulated_km, 0)
@@ -89,6 +92,40 @@ test('due status uses whichever of km or months comes first', () => {
   assert.equal(G.gearStatus({
     accumulated_km: 9000, km_at_last_service: 0, interval_km: null, interval_months: null, last_service_date: '2020-01-01'
   }, '2026-11-10').status, 'ok')
+})
+
+test('chain wax is due at 250 km and ignores months', () => {
+  const base = { kind: 'chain_wax', accumulated_km: 0, km_at_last_service: 0, interval_km: 250, interval_months: null, last_service_date: '2020-01-01' }
+  assert.equal(G.gearStatus(Object.assign({}, base, { accumulated_km: 100 }), '2026-11-10').status, 'ok')
+  assert.equal(G.gearStatus(Object.assign({}, base, { accumulated_km: 200 }), '2026-11-10').status, 'soon')
+  const due = G.gearStatus(Object.assign({}, base, { accumulated_km: 250 }), '2026-11-10')
+  assert.equal(due.status, 'due')
+  assert.equal(due.limiter, 'km')
+  assert.equal(due.label, '到期檢查')
+})
+
+test('chain replacement history keeps every change and the km ridden since the last one', () => {
+  const bike = { id: 'b1', odometer_km: 2480 }
+  const first = G.recordChainReplacement([], {
+    id: 'h1', bike_id: 'b1', replaced_on: '2025-06-01', bike_km: 800, brand: 'SRAM', note: '第一條'
+  })
+  const history = G.recordChainReplacement(first, {
+    id: 'h2', bike_id: 'b1', replaced_on: '2026-08-01', bike_km: 2000, brand: 'KMC', note: ''
+  })
+  const summary = G.chainSummary(bike, history)
+  assert.equal(summary.date, '2026/08/01')
+  assert.equal(summary.km, 480)
+  assert.deepEqual(summary.history.map(row => row.bike_km), [2000, 800])
+  assert.equal(summary.history[1].brand, 'SRAM')
+  assert.equal(summary.history[1].note, '第一條')
+  const after = Object.assign({}, bike, { odometer_km: 2600 })
+  const again = G.recordChainReplacement(history, {
+    id: 'h3', bike_id: 'b1', replaced_on: '2026-11-10', bike_km: after.odometer_km, brand: '', note: '磨耗 0.8%'
+  })
+  const reset = G.chainSummary(after, again)
+  assert.equal(reset.km, 0)
+  assert.equal(reset.history.length, 3)
+  assert.equal(reset.history[0].note, '磨耗 0.8%')
 })
 
 test('strava import only keeps bike sports and auto-assigns a single setup', () => {

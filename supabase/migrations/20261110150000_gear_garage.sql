@@ -54,6 +54,17 @@ create table if not exists public.mileage_logs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.chain_replacements (
+  id uuid primary key default gen_random_uuid(),
+  line_user_id text not null,
+  bike_id uuid not null references public.bikes (id) on delete cascade,
+  replaced_on date not null,
+  bike_km numeric not null,
+  note text not null default '',
+  brand text not null default '',
+  created_at timestamptz not null default now()
+);
+
 -- 之後 Strava 同步用。這一版沒有 OAuth，也不會寫入正式活動。
 create table if not exists public.pending_activities (
   id uuid primary key default gen_random_uuid(),
@@ -86,7 +97,7 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.gear_components add constraint gear_components_parent check (
-    (bike_id is not null and wheelset_id is null and kind in ('chain', 'brake_fluid', 'brake_pads', 'cassette_chainrings', 'shift_cables', 'bar_tape'))
+    (bike_id is not null and wheelset_id is null and kind in ('chain_wax', 'chain_replace', 'brake_fluid', 'brake_pads', 'cassette_chainrings', 'shift_cables', 'bar_tape'))
     or
     (wheelset_id is not null and bike_id is null and kind in ('sealant', 'tires'))
   );
@@ -95,10 +106,16 @@ do $$ begin
   alter table public.gear_components add constraint gear_components_reminder check (reminder_kind in ('check', 'replace'));
 exception when duplicate_object then null; end $$;
 do $$ begin
-  alter table public.gear_components add constraint gear_components_basis check (basis in ('official', 'mixed', 'rule_of_thumb'));
+  alter table public.gear_components add constraint gear_components_basis check (basis in ('official', 'mixed', 'rule_of_thumb', 'team'));
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.gear_components add constraint gear_components_km_nonneg check (accumulated_km >= 0 and km_at_last_service >= 0);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.chain_replacements add constraint chain_replacements_km_nonneg check (bike_km >= 0 and bike_km < 1000000);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.chain_replacements add constraint chain_replacements_note_len check (char_length(note) <= 200 and char_length(brand) <= 80);
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.mileage_logs add constraint mileage_logs_km_pos check (km > 0 and km <= 2000);
@@ -113,6 +130,7 @@ create unique index if not exists wheelsets_one_mounted_uidx on public.wheelsets
 create index if not exists gear_components_bike_idx on public.gear_components (bike_id);
 create index if not exists gear_components_wheel_idx on public.gear_components (wheelset_id);
 create index if not exists mileage_logs_owner_idx on public.mileage_logs (line_user_id, ride_date);
+create index if not exists chain_replacements_bike_idx on public.chain_replacements (bike_id, replaced_on);
 create index if not exists pending_activities_owner_idx on public.pending_activities (line_user_id, status);
 
 create or replace function private.gear_stamp_owner()
@@ -164,12 +182,32 @@ begin
   insert into public.gear_components (
     line_user_id, bike_id, kind, last_service_date, interval_km, interval_months, reminder_kind, basis
   ) values
-    (new.line_user_id, new.id, 'chain', current_date, 500, 1, 'check', 'mixed'),
+    (new.line_user_id, new.id, 'chain_wax', current_date, 250, null, 'replace', 'team'),
+    (new.line_user_id, new.id, 'chain_replace', current_date, null, null, 'replace', 'official'),
     (new.line_user_id, new.id, 'brake_fluid', current_date, null, 12, 'check', 'mixed'),
     (new.line_user_id, new.id, 'brake_pads', current_date, null, 1, 'check', 'mixed'),
     (new.line_user_id, new.id, 'cassette_chainrings', current_date, null, null, 'check', 'official'),
     (new.line_user_id, new.id, 'shift_cables', current_date, null, 12, 'check', 'rule_of_thumb'),
     (new.line_user_id, new.id, 'bar_tape', current_date, null, 12, 'replace', 'rule_of_thumb');
+  insert into public.chain_replacements (line_user_id, bike_id, replaced_on, bike_km, note, brand)
+  values (new.line_user_id, new.id, current_date, new.odometer_km, '', '');
+  return new;
+end;
+$$;
+
+create or replace function private.gear_guard_chain()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1 from public.bikes b
+    where b.id = new.bike_id and b.line_user_id = new.line_user_id
+  ) then
+    raise exception 'bike not found' using errcode = '42501';
+  end if;
   return new;
 end;
 $$;
@@ -227,7 +265,7 @@ begin
   if new.is_indoor then
     update public.gear_components
       set accumulated_km = accumulated_km + new.km
-      where bike_id = new.bike_id and kind = 'chain';
+      where bike_id = new.bike_id and kind = 'chain_wax';
     new.wheelset_id := null;
     return new;
   end if;
@@ -255,6 +293,7 @@ revoke all on function
   private.gear_stamp_owner(),
   private.gear_seed_wheelset(),
   private.gear_seed_bike(),
+  private.gear_guard_chain(),
   private.gear_guard_last_wheelset(),
   private.gear_single_mounted(),
   private.gear_apply_mileage()
@@ -263,6 +302,7 @@ grant execute on function
   private.gear_stamp_owner(),
   private.gear_seed_wheelset(),
   private.gear_seed_bike(),
+  private.gear_guard_chain(),
   private.gear_guard_last_wheelset(),
   private.gear_single_mounted(),
   private.gear_apply_mileage()
@@ -280,6 +320,12 @@ create trigger gear_stamp_components before insert or update on public.gear_comp
 drop trigger if exists gear_stamp_mileage on public.mileage_logs;
 create trigger gear_stamp_mileage before insert or update on public.mileage_logs
   for each row execute function private.gear_stamp_owner();
+drop trigger if exists gear_stamp_chain_replacements on public.chain_replacements;
+create trigger gear_stamp_chain_replacements before insert or update on public.chain_replacements
+  for each row execute function private.gear_stamp_owner();
+drop trigger if exists z_gear_guard_chain on public.chain_replacements;
+create trigger z_gear_guard_chain before insert or update on public.chain_replacements
+  for each row execute function private.gear_guard_chain();
 drop trigger if exists gear_stamp_pending on public.pending_activities;
 create trigger gear_stamp_pending before insert or update on public.pending_activities
   for each row execute function private.gear_stamp_owner();
@@ -305,17 +351,20 @@ alter table public.bikes enable row level security;
 alter table public.wheelsets enable row level security;
 alter table public.gear_components enable row level security;
 alter table public.mileage_logs enable row level security;
+alter table public.chain_replacements enable row level security;
 alter table public.pending_activities enable row level security;
 alter table public.bikes force row level security;
 alter table public.wheelsets force row level security;
 alter table public.gear_components force row level security;
 alter table public.mileage_logs force row level security;
+alter table public.chain_replacements force row level security;
 alter table public.pending_activities force row level security;
 
 drop policy if exists bikes_all on public.bikes;
 drop policy if exists wheelsets_all on public.wheelsets;
 drop policy if exists gear_components_all on public.gear_components;
 drop policy if exists mileage_logs_all on public.mileage_logs;
+drop policy if exists chain_replacements_all on public.chain_replacements;
 drop policy if exists pending_activities_all on public.pending_activities;
 
 create policy bikes_all on public.bikes for all to authenticated
@@ -330,16 +379,19 @@ create policy gear_components_all on public.gear_components for all to authentic
 create policy mileage_logs_all on public.mileage_logs for all to authenticated
   using (private.is_self(line_user_id))
   with check (private.is_self(line_user_id));
+create policy chain_replacements_all on public.chain_replacements for all to authenticated
+  using (private.is_self(line_user_id))
+  with check (private.is_self(line_user_id));
 create policy pending_activities_all on public.pending_activities for all to authenticated
   using (private.is_self(line_user_id))
   with check (private.is_self(line_user_id));
 
 grant select, insert, update, delete on
-  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.pending_activities
+  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.chain_replacements, public.pending_activities
 to authenticated;
 grant all on
-  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.pending_activities
+  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.chain_replacements, public.pending_activities
 to service_role;
 revoke all on
-  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.pending_activities
+  public.bikes, public.wheelsets, public.gear_components, public.mileage_logs, public.chain_replacements, public.pending_activities
 from anon, public;

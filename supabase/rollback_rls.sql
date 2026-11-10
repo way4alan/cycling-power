@@ -43,6 +43,8 @@ drop trigger if exists gear_guard_last_wheelset on public.wheelsets;
 drop trigger if exists gear_seed_wheelset on public.wheelsets;
 drop trigger if exists gear_seed_bike on public.bikes;
 drop trigger if exists gear_stamp_pending on public.pending_activities;
+drop trigger if exists z_gear_guard_chain on public.chain_replacements;
+drop trigger if exists gear_stamp_chain_replacements on public.chain_replacements;
 drop trigger if exists gear_stamp_mileage on public.mileage_logs;
 drop trigger if exists gear_stamp_components on public.gear_components;
 drop trigger if exists gear_stamp_wheelsets on public.wheelsets;

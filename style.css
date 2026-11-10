@@ -777,7 +777,7 @@ input[type=range]::-moz-range-thumb {
 .gear-row, .part-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .gear-row button, .part-row button { width: auto; }
 .part-row { align-items: flex-start; }
-.gear-status { font-size: 12px; font-weight: 700; border-radius: 99px; padding: 2px 8px; }
+.gear-status { flex: none; white-space: nowrap; font-size: 12px; font-weight: 700; border-radius: 99px; padding: 2px 8px; }
 .gear-status.ok { color: var(--ok); }
 .gear-status.soon { color: #ffe7b0; }
 .gear-status.due { color: #ffd0d4; background: rgba(255, 107, 120, .15); }
@@ -791,6 +791,11 @@ input[type=range]::-moz-range-thumb {
 }
 .nav-btn { position: relative; }
 .strava-soon { opacity: .7; }
+.chain-card { margin: 8px 0 14px; padding: 12px; border-radius: 16px; border: 1px solid rgba(230, 43, 138, .45); background: rgba(230, 43, 138, .08); scroll-margin-top: 84px; }
+.chain-since { font-size: 16px; font-weight: 700; margin: 6px 0 10px; }
+.chain-km { white-space: nowrap; }
+.chain-history { margin: 6px 0 0 18px; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.chain-card h4 { margin-top: 12px; font-size: 14px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

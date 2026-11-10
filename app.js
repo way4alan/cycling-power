@@ -59,7 +59,7 @@ let lineSessionPromise = null
 let lineRefreshTimer = 0
 let myRegByRide = new Map()
 let schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false, gear: false }
-let gearState = { bikes: [], wheelsets: [], components: [] }
+let gearState = { bikes: [], wheelsets: [], components: [], replacements: [] }
 let gearScreen = 'list'
 let gearBikeId = ''
 let gearFocus = ''
@@ -1068,13 +1068,13 @@ function openRequestedPanel() {
     switchTab('ride')
     showRideForm()
   }
-  if (open === 'gear' || open === 'add-bike' || open === 'bike' || open === 'wheels' || open === 'basis') {
+  if (open === 'gear' || open === 'add-bike' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain') {
     switchTab('profile')
     gearScreen = open === 'add-bike' ? 'add' : (open === 'gear' ? 'list' : 'detail')
     gearBikeId = 'bike-madone'
     gearFocus = open
     renderGear()
-    const node = document.getElementById(open === 'wheels' ? 'wheel-switch' : 'gear-garage')
+    const node = document.getElementById(open === 'wheels' ? 'wheel-switch' : open === 'chain' ? 'chain-card' : 'gear-garage')
     if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
   }
   if (open === 'announce') {
@@ -1206,7 +1206,7 @@ function nextSunday() {
   return shiftDate(today, delta === 0 ? 7 : delta)
 }
 function buildDemoGear(day) {
-  if (!globalThis.PaceGear) return { bikes: [], wheelsets: [], gear_components: [] }
+  if (!globalThis.PaceGear) return { bikes: [], wheelsets: [], gear_components: [], chain_replacements: [] }
   const bike = { id: 'bike-madone', line_user_id: 'demo-me', name: 'Madone SLR Gen 8', brand: 'Trek', strava_gear_id: '', odometer_km: 2480, archived: false, created_on: day(-200) }
   const seeded = PaceGear.seedBike(bike, { wheelId: 'wheel-stock' })
   seeded.wheelset.mounted = false
@@ -1221,12 +1221,20 @@ function buildDemoGear(day) {
   seeded.components.forEach((part, i) => {
     part.id = 'comp-' + i
     part.last_service_date = part.wheelset_id ? day(-20) : day(-12)
-    if (part.kind === 'chain') {
-      part.accumulated_km = 120
+    if (part.kind === 'chain_wax') {
+      part.accumulated_km = 250
       part.km_at_last_service = 0
     }
   })
-  return { bikes: [bike], wheelsets: [seeded.wheelset, aero], gear_components: seeded.components.concat(aeroParts) }
+  return {
+    bikes: [bike],
+    wheelsets: [seeded.wheelset, aero],
+    gear_components: seeded.components.concat(aeroParts),
+    chain_replacements: [
+      { id: 'cr1', line_user_id: 'demo-me', bike_id: bike.id, replaced_on: day(-500), bike_km: 800, note: '第一條', brand: 'SRAM', created_at: day(-500) },
+      { id: 'cr2', line_user_id: 'demo-me', bike_id: bike.id, replaced_on: day(-90), bike_km: 2000, note: '', brand: 'KMC', created_at: day(-90) }
+    ]
+  }
 }
 const DEMO_GPX = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="pace-demo">
@@ -1399,6 +1407,7 @@ function createDemoDb() {
     bikes: gearDemo.bikes,
     wheelsets: gearDemo.wheelsets,
     gear_components: gearDemo.gear_components,
+    chain_replacements: gearDemo.chain_replacements,
     mileage_logs: [],
     pending_activities: []
   }
@@ -1849,7 +1858,7 @@ function paintZones() {
     <div class="zone-legend">${segments.map(seg => `<div><span><i class="swatch" style="background:${seg.color}"></i>${esc(seg.label)}</span><span>${esc(seg.text)}</span></div>`).join('')}</div>`
 }
 async function loadGear() {
-  gearState = { bikes: [], wheelsets: [], components: [] }
+  gearState = { bikes: [], wheelsets: [], components: [], replacements: [] }
   if (!schemaCaps.gear) return
   const bikes = await db.from('bikes').select('*')
   if (bikes.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(bikes.error)) {
@@ -1859,7 +1868,13 @@ async function loadGear() {
   if (bikes.error) return
   const wheels = await db.from('wheelsets').select('*')
   const parts = await db.from('gear_components').select('*')
-  gearState = { bikes: bikes.data || [], wheelsets: wheels.data || [], components: parts.data || [] }
+  const history = await db.from('chain_replacements').select('*')
+  gearState = {
+    bikes: bikes.data || [],
+    wheelsets: wheels.data || [],
+    components: parts.data || [],
+    replacements: history.error ? [] : (history.data || [])
+  }
 }
 function gearDueCount() {
   if (!globalThis.PaceGear || !schemaCaps.gear) return []
@@ -1886,12 +1901,37 @@ function renderGearReminder() {
   host.innerHTML = `<button type="button" data-act="gear-home" data-bike="${esc(bike ? bike.id : '')}">保養提醒：${esc(place)}的${esc(label)}到期檢查${due.length > 1 ? '，還有 ' + (due.length - 1) + ' 項' : ''}</button>`
   updateGearBadge()
 }
+function chainCard(bike, today) {
+  const wax = gearState.components.find(part => part.bike_id === bike.id && part.kind === 'chain_wax')
+  const summary = PaceGear.chainSummary(bike, gearState.replacements)
+  const waxStatus = wax ? PaceGear.gearStatus(wax, today) : { status: 'ok', label: '正常' }
+  const history = summary.history.map(row => `<li>${esc(PaceGear.formatChainDate(row.replaced_on))} · 當時車里程 ${esc(String(row.bike_km))} km${row.brand ? ' · ' + esc(row.brand) : ''}${row.note ? ' · ' + esc(row.note) : ''}</li>`).join('')
+  const replaceNote = PaceGear.NOTES.chain_replace
+  const sources = (replaceNote.sources || []).map(url => {
+    const safe = PaceCore.safeHttpUrl(url)
+    return safe ? `<div><a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">${esc(safe)}</a></div>` : ''
+  }).join('')
+  return `<section class="chain-card" id="chain-card">
+    <h3>鍊條</h3>
+    <p class="chain-since">${summary.date ? '上次換鍊：' + esc(summary.date) + '，之後已騎 <span class="chain-km">' + esc(String(summary.km)) + ' km</span>' : '還沒有換鍊紀錄'}</p>
+    <div class="part-row"><div><b>鍊條上蠟</b> <span class="basis-flag">車隊規定</span><div class="field-help">預設 250 km，沒有月份。這不是原廠標準。</div></div><span class="gear-status ${waxStatus.status}">${waxStatus.label}</span></div>
+    ${wax ? `<div class="form-row"><label for="wax-interval">上蠟間隔 km</label><input id="wax-interval" type="number" min="1" step="1" value="${esc(String(wax.interval_km || 250))}"></div><button class="edit-btn" type="button" data-act="gear-wax-interval" data-id="${esc(wax.id)}">儲存間隔</button><button class="edit-btn" type="button" data-act="gear-reset" data-id="${esc(wax.id)}">已上蠟</button>` : ''}
+    <details class="gear-basis"><summary>上蠟的建議依據</summary><p>${esc(PaceGear.NOTES.chain_wax.body)}</p></details>
+    <div class="part-row"><div><b>鍊條更換</b><div class="field-help">沒有固定公里或月份</div></div><span class="gear-status ok">依磨耗判斷</span></div>
+    <details class="gear-basis" id="chain-basis"><summary>建議依據</summary><p>${esc(replaceNote.body)}</p>${sources}</details>
+    <div class="form-row"><label for="chain-brand">這次鏈條品牌（選填）</label><input id="chain-brand" type="text"></div>
+    <div class="form-row"><label for="chain-note">備註（選填）</label><input id="chain-note" type="text"></div>
+    <button class="save-btn" type="button" data-act="gear-chain" data-id="${esc(bike.id)}">已更換</button>
+    <h4>換鍊紀錄</h4>
+    <ul class="chain-history">${history || '<li>尚無紀錄</li>'}</ul>
+  </section>`
+}
 function partRows(parts, today) {
   return parts.map(part => {
     const spec = PaceGear.KINDS[part.kind] || { label: part.kind }
     const note = PaceGear.NOTES[part.kind]
     const status = PaceGear.gearStatus(part, today)
-    const flag = part.basis === 'rule_of_thumb' ? '<span class="basis-flag">經驗值</span>' : ''
+    const flag = part.basis === 'rule_of_thumb' ? '<span class="basis-flag">經驗值</span>' : (part.basis === 'team' ? '<span class="basis-flag">車隊規定</span>' : '')
     const open = gearFocus === 'basis' && status.status === 'due' ? ' open' : ''
     const sources = (note && note.sources || []).map(url => {
       const safe = PaceCore.safeHttpUrl(url)
@@ -1902,7 +1942,7 @@ function partRows(parts, today) {
       <span class="gear-status ${status.status}">${status.label}</span>
     </div>
     <details class="gear-basis" id="gear-basis-${esc(part.kind)}"${open}><summary>建議依據</summary><p>${esc(note ? note.body : '')}</p>${sources}</details>
-    <button class="edit-btn" type="button" data-act="gear-reset" data-id="${esc(part.id)}">${part.reminder_kind === 'replace' ? '已更換' : '已檢查'}</button>`
+    <button class="edit-btn" type="button" data-act="gear-reset" data-id="${esc(part.id)}">${part.kind === 'chain_wax' ? '已上蠟' : (part.reminder_kind === 'replace' ? '已更換' : '已檢查')}</button>`
   }).join('')
 }
 function renderGear() {
@@ -1931,8 +1971,9 @@ function renderGear() {
     host.innerHTML = `<button class="text-back" type="button" data-act="gear-list">${icon('chevron-left', 16)}我的裝備</button>
       <h2>${esc(bike.name)}</h2>
       <p class="field-help">${esc(bike.brand || '')} · ${esc(String(bike.odometer_km))} km</p>
+      ${chainCard(bike, today)}
       <h3>車上的耗材</h3>
-      ${partRows(parts, today)}
+      ${partRows(parts.filter(part => part.kind !== 'chain_wax' && part.kind !== 'chain_replace'), today)}
       <h3 id="wheel-switch">輪組</h3>
       ${wheels.map(wheel => {
         const mounted = wheel.mounted ? '目前安裝' : '裝上這組'
@@ -2047,6 +2088,33 @@ async function logGearKm(bikeId) {
   renderGear()
   renderGearReminder()
 }
+async function saveWaxInterval(id) {
+  const km = Number(document.getElementById('wax-interval').value)
+  if (!(km > 0)) { showToast('請填上蠟間隔'); return }
+  const res = await db.from('gear_components').update({ interval_km: km, interval_months: null }).eq('id', id)
+  if (res.error) { showToast('間隔沒有存起來'); return }
+  showToast('已更新上蠟間隔')
+  await loadGear()
+  renderGear()
+  renderGearReminder()
+}
+async function replaceChain(bikeId) {
+  const bike = gearState.bikes.find(row => row.id === bikeId)
+  if (!bike) return
+  const res = await db.from('chain_replacements').insert({
+    line_user_id: myProfile.line_user_id,
+    bike_id: bikeId,
+    replaced_on: taipeiToday(),
+    bike_km: Number(bike.odometer_km || 0),
+    note: (document.getElementById('chain-note').value || '').trim(),
+    brand: (document.getElementById('chain-brand').value || '').trim()
+  })
+  if (res.error) { showToast('沒有記上換鍊'); return }
+  showToast('已記下這次換鍊')
+  gearFocus = 'chain'
+  await loadGear()
+  renderGear()
+}
 async function resetGearPart(id) {
   const part = gearState.components.find(row => row.id === id)
   if (!part) return
@@ -2054,7 +2122,7 @@ async function resetGearPart(id) {
     last_service_date: taipeiToday(), km_at_last_service: part.accumulated_km || 0
   }).eq('id', id)
   if (res.error) { showToast('沒有重設'); return }
-  showToast(part.reminder_kind === 'replace' ? '已記成更換' : '已記成檢查')
+  showToast(part.kind === 'chain_wax' ? '已上蠟' : (part.reminder_kind === 'replace' ? '已記成更換' : '已記成檢查'))
   await loadGear()
   renderGear()
   renderGearReminder()
@@ -3170,6 +3238,8 @@ function onGlobalClick(e) {
   else if (act === 'gear-mount') mountWheelset(el.dataset.id, el.dataset.bike)
   else if (act === 'gear-km') logGearKm(el.dataset.id)
   else if (act === 'gear-reset') resetGearPart(el.dataset.id)
+  else if (act === 'gear-chain') replaceChain(el.dataset.id)
+  else if (act === 'gear-wax-interval') saveWaxInterval(el.dataset.id)
   else if (act === 'gear-home') { switchTab('profile'); gearScreen = 'detail'; gearBikeId = el.dataset.bike || gearBikeId; renderGear() }
 }
 function onTouchStart(e) {
