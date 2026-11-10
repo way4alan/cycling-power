@@ -1,5 +1,10 @@
 -- 本機測試資料。line_user_id 的形狀與 LINE 使用者 ID 相同（U + 32 hex）。
 truncate table
+  public.mileage_logs,
+  public.pending_activities,
+  public.gear_components,
+  public.wheelsets,
+  public.bikes,
   public.attendances,
   public.registrations,
   public.ride_groups,

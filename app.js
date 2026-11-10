@@ -58,7 +58,11 @@ let lineSession = null
 let lineSessionPromise = null
 let lineRefreshTimer = 0
 let myRegByRide = new Map()
-let schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false }
+let schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false, gear: false }
+let gearState = { bikes: [], wheelsets: [], components: [] }
+let gearScreen = 'list'
+let gearBikeId = ''
+let gearFocus = ''
 let rideState = { rides: [], regs: [], groups: [], atts: [], routes: [], templates: [], templateGroups: [] }
 let rankingCtx = { rides: [], attendances: [], error: null }
 let publishLock = false
@@ -431,9 +435,9 @@ function parseGroupLines(text) {
   }).filter(g => g.name)
 }
 async function probeSchema() {
-  schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false, category: false }
+  schemaCaps = { groups: false, templates: false, routes: false, rideExtras: false, regGroup: false, category: false, gear: false }
   if (DEMO) {
-    schemaCaps = { groups: true, templates: true, routes: true, rideExtras: true, regGroup: true, category: true }
+    schemaCaps = { groups: true, templates: true, routes: true, rideExtras: true, regGroup: true, category: true, gear: true }
     return
   }
   const checks = [
@@ -442,7 +446,8 @@ async function probeSchema() {
     ['routes', 'routes', 'id'],
     ['rideExtras', 'rides', 'cancelled'],
     ['regGroup', 'registrations_directory', 'group_id'],
-    ['category', 'rides', 'category']
+    ['category', 'rides', 'category'],
+    ['gear', 'bikes', 'id']
   ]
   await Promise.all(checks.map(async ([key, table, col]) => {
     const res = await db.from(table).select(col).limit(1)
@@ -588,6 +593,7 @@ function renderNextRide() {
   if (layout.compactSunday) parts.push(compactSundayHtml(layout.compactSunday))
   host.innerHTML = parts.join('')
   renderMonthlyHint(layout)
+  renderGearReminder()
 }
 function openRide(id) {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(id || ''))) return
@@ -1062,6 +1068,15 @@ function openRequestedPanel() {
     switchTab('ride')
     showRideForm()
   }
+  if (open === 'gear' || open === 'add-bike' || open === 'bike' || open === 'wheels' || open === 'basis') {
+    switchTab('profile')
+    gearScreen = open === 'add-bike' ? 'add' : (open === 'gear' ? 'list' : 'detail')
+    gearBikeId = 'bike-madone'
+    gearFocus = open
+    renderGear()
+    const node = document.getElementById(open === 'wheels' ? 'wheel-switch' : 'gear-garage')
+    if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
+  }
   if (open === 'announce') {
     const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
     const id = safeRide && (rideState.rides || []).some(r => r.id === safeRide) ? safeRide : fallback
@@ -1190,6 +1205,29 @@ function nextSunday() {
   const delta = (7 - dt.getUTCDay()) % 7
   return shiftDate(today, delta === 0 ? 7 : delta)
 }
+function buildDemoGear(day) {
+  if (!globalThis.PaceGear) return { bikes: [], wheelsets: [], gear_components: [] }
+  const bike = { id: 'bike-madone', line_user_id: 'demo-me', name: 'Madone SLR Gen 8', brand: 'Trek', strava_gear_id: '', odometer_km: 2480, archived: false, created_on: day(-200) }
+  const seeded = PaceGear.seedBike(bike, { wheelId: 'wheel-stock' })
+  seeded.wheelset.mounted = false
+  seeded.wheelset.odometer_km = 1620
+  const aero = { id: 'wheel-aero', line_user_id: 'demo-me', bike_id: bike.id, name: 'Bontrager Aeolus RSL', brand: 'Bontrager', odometer_km: 860, mounted: true }
+  const aeroParts = PaceGear.seedWheelsetComponents(aero).map((part, i) => {
+    part.id = 'comp-aero-' + i
+    if (part.kind === 'sealant') part.last_service_date = day(-120)
+    else part.last_service_date = day(-20)
+    return part
+  })
+  seeded.components.forEach((part, i) => {
+    part.id = 'comp-' + i
+    part.last_service_date = part.wheelset_id ? day(-20) : day(-12)
+    if (part.kind === 'chain') {
+      part.accumulated_km = 120
+      part.km_at_last_service = 0
+    }
+  })
+  return { bikes: [bike], wheelsets: [seeded.wheelset, aero], gear_components: seeded.components.concat(aeroParts) }
+}
 const DEMO_GPX = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="pace-demo">
   <trk><name>示範壽山</name><trkseg>
@@ -1204,6 +1242,7 @@ function createDemoDb() {
   const today = taipeiToday()
   const day = (n) => shiftDate(today, n)
   const now = new Date().toISOString()
+  const gearDemo = buildDemoGear(day)
   const rider = (partial) => Object.assign({
     status: 'approved', z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, mood: '', tire_width: null,
     name_color: '', is_admin: false, attendance_count: 0, avatar_url: '', last_seen: now, updated_at: now
@@ -1356,7 +1395,12 @@ function createDemoDb() {
       { id: 'a-old1', ride_id: 'ride-old', line_user_id: 'u-lin', name: '小林', avatar_url: '' },
       { id: 'a-old2', ride_id: 'ride-old', line_user_id: 'demo-me', name: '阿揚', avatar_url: '' },
       { id: 'a-old3', ride_id: 'ride-old', line_user_id: 'u-kevin', name: 'Kevin', avatar_url: '' }
-    ]
+    ],
+    bikes: gearDemo.bikes,
+    wheelsets: gearDemo.wheelsets,
+    gear_components: gearDemo.gear_components,
+    mileage_logs: [],
+    pending_activities: []
   }
   if (params.get('scenario') === 'fallback') store.rides = store.rides.filter(r => r.category !== 'challenge')
   let seq = 1
@@ -1472,6 +1516,7 @@ async function init() {
     await loadRiders()
     await loadRideState()
     await loadRankingContext()
+    await loadGear()
     renderLeaderboard()
     renderNextRide()
     renderMatch()
@@ -1803,6 +1848,217 @@ function paintZones() {
     </div>
     <div class="zone-legend">${segments.map(seg => `<div><span><i class="swatch" style="background:${seg.color}"></i>${esc(seg.label)}</span><span>${esc(seg.text)}</span></div>`).join('')}</div>`
 }
+async function loadGear() {
+  gearState = { bikes: [], wheelsets: [], components: [] }
+  if (!schemaCaps.gear) return
+  const bikes = await db.from('bikes').select('*')
+  if (bikes.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(bikes.error)) {
+    schemaCaps.gear = false
+    return
+  }
+  if (bikes.error) return
+  const wheels = await db.from('wheelsets').select('*')
+  const parts = await db.from('gear_components').select('*')
+  gearState = { bikes: bikes.data || [], wheelsets: wheels.data || [], components: parts.data || [] }
+}
+function gearDueCount() {
+  if (!globalThis.PaceGear || !schemaCaps.gear) return []
+  return PaceGear.dueItems(gearState.components, taipeiToday())
+}
+function updateGearBadge() {
+  const due = gearDueCount()
+  document.querySelectorAll('.gear-nav-badge').forEach(el => {
+    el.hidden = !due.length
+    el.textContent = due.length ? String(due.length) : ''
+  })
+}
+function renderGearReminder() {
+  const host = document.getElementById('gear-reminder')
+  if (!host) return
+  const due = gearDueCount()
+  if (!due.length) { host.hidden = true; host.textContent = ''; updateGearBadge(); return }
+  const first = due[0].item
+  const wheel = gearState.wheelsets.find(row => row.id === first.wheelset_id)
+  const bike = gearState.bikes.find(row => row.id === (first.bike_id || (wheel && wheel.bike_id)))
+  const place = wheel ? wheel.name : (bike ? bike.name : '裝備')
+  const label = (PaceGear.KINDS[first.kind] || {}).label || '耗材'
+  host.hidden = false
+  host.innerHTML = `<button type="button" data-act="gear-home" data-bike="${esc(bike ? bike.id : '')}">保養提醒：${esc(place)}的${esc(label)}到期檢查${due.length > 1 ? '，還有 ' + (due.length - 1) + ' 項' : ''}</button>`
+  updateGearBadge()
+}
+function partRows(parts, today) {
+  return parts.map(part => {
+    const spec = PaceGear.KINDS[part.kind] || { label: part.kind }
+    const note = PaceGear.NOTES[part.kind]
+    const status = PaceGear.gearStatus(part, today)
+    const flag = part.basis === 'rule_of_thumb' ? '<span class="basis-flag">經驗值</span>' : ''
+    const open = gearFocus === 'basis' && status.status === 'due' ? ' open' : ''
+    const sources = (note && note.sources || []).map(url => {
+      const safe = PaceCore.safeHttpUrl(url)
+      return safe ? `<div><a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">${esc(safe)}</a></div>` : ''
+    }).join('')
+    return `<div class="part-row" id="part-${esc(part.id)}">
+      <div><b>${esc(spec.label)}</b> ${flag}<div class="field-help">${esc(part.brand_note || '')}</div></div>
+      <span class="gear-status ${status.status}">${status.label}</span>
+    </div>
+    <details class="gear-basis" id="gear-basis-${esc(part.kind)}"${open}><summary>建議依據</summary><p>${esc(note ? note.body : '')}</p>${sources}</details>
+    <button class="edit-btn" type="button" data-act="gear-reset" data-id="${esc(part.id)}">${part.reminder_kind === 'replace' ? '已更換' : '已檢查'}</button>`
+  }).join('')
+}
+function renderGear() {
+  const host = document.getElementById('gear-garage')
+  if (!host) return
+  if (!schemaCaps.gear || !globalThis.PaceGear) { host.hidden = true; return }
+  host.hidden = false
+  const today = taipeiToday()
+  const strava = `<button class="cancel-btn strava-soon" type="button" disabled>連結 Strava（即將推出）</button>
+    <p class="field-help">之後只匯入 Ride、GravelRide、MountainBikeRide、EBikeRide。VirtualRide 會問要不要計入鏈條。跑步、游泳不計。只有一台車、一組輪組時自動對上，否則先問你。</p>`
+  if (gearScreen === 'add') {
+    host.innerHTML = `<h2>新增一台車</h2>
+      <div class="form-row"><label for="gear-name">名稱</label><input id="gear-name" type="text" placeholder="例如 Madone SLR Gen 8"></div>
+      <div class="form-row"><label for="gear-brand">品牌</label><input id="gear-brand" type="text" placeholder="例如 Trek"></div>
+      <div class="form-row"><label for="gear-odo">目前里程 km</label><input id="gear-odo" type="number" min="0" step="1" value="0"></div>
+      <div class="form-row"><label for="gear-strava">Strava 裝備編號（選填，之後同步用）</label><input id="gear-strava" type="text"></div>
+      <p class="field-help">存檔後會自動加上一組可改名的「原廠輪組」，以及鏈條、煞車、外胎、補胎液等項目。</p>
+      <div class="btn-row"><button class="save-btn" type="button" data-act="gear-create">建立</button><button class="cancel-btn" type="button" data-act="gear-list">返回</button></div>`
+    return
+  }
+  if (gearScreen === 'detail') {
+    const bike = gearState.bikes.find(row => row.id === gearBikeId) || gearState.bikes[0]
+    if (!bike) { gearScreen = 'list'; renderGear(); return }
+    const wheels = gearState.wheelsets.filter(row => row.bike_id === bike.id)
+    const parts = gearState.components.filter(row => row.bike_id === bike.id)
+    host.innerHTML = `<button class="text-back" type="button" data-act="gear-list">${icon('chevron-left', 16)}我的裝備</button>
+      <h2>${esc(bike.name)}</h2>
+      <p class="field-help">${esc(bike.brand || '')} · ${esc(String(bike.odometer_km))} km</p>
+      <h3>車上的耗材</h3>
+      ${partRows(parts, today)}
+      <h3 id="wheel-switch">輪組</h3>
+      ${wheels.map(wheel => {
+        const mounted = wheel.mounted ? '目前安裝' : '裝上這組'
+        const wheelParts = gearState.components.filter(row => row.wheelset_id === wheel.id)
+        return `<div class="gear-row"><div><b>${esc(wheel.name)}</b><div class="field-help">${esc(wheel.brand || '')} · ${esc(String(wheel.odometer_km))} km</div></div>
+          ${wheel.mounted ? `<span class="gear-status ok">${mounted}</span>` : `<button class="edit-btn" type="button" data-act="gear-mount" data-id="${esc(wheel.id)}" data-bike="${esc(bike.id)}">${mounted}</button>`}
+        </div>${partRows(wheelParts, today)}`
+      }).join('')}
+      <div class="form-row"><label for="new-wheel">再加一組輪組</label><input id="new-wheel" type="text" placeholder="例如 Bontrager Aeolus"></div>
+      <button class="cancel-btn" type="button" data-act="gear-wheel" data-id="${esc(bike.id)}">新增輪組</button>
+      <h3>記一筆里程</h3>
+      <div class="form-row"><label for="log-date">日期</label><input id="log-date" type="date" value="${esc(today)}"></div>
+      <div class="form-row"><label for="log-km">公里</label><input id="log-km" type="number" min="0.1" step="0.1"></div>
+      <div class="form-row"><label for="log-wheel">這次用的輪組</label><select id="log-wheel">${wheels.map(wheel => `<option value="${esc(wheel.id)}" ${wheel.mounted ? 'selected' : ''}>${esc(wheel.name)}</option>`).join('')}</select></div>
+      <label class="check-line"><input id="log-indoor" type="checkbox"> 室內訓練</label>
+      <label class="check-line"><input id="log-chain" type="checkbox"> 室內也計入車架和鏈條（輪組、外胎、補胎液仍不計）</label>
+      <button class="save-btn" type="button" data-act="gear-km" data-id="${esc(bike.id)}">記入里程</button>`
+    return
+  }
+  const bikes = gearState.bikes.filter(row => row.archived !== true)
+  host.innerHTML = `<h2>我的裝備</h2>${strava}
+    ${bikes.map(bike => {
+      const due = PaceGear.dueItems(gearState.components.filter(part => part.bike_id === bike.id || gearState.wheelsets.some(wheel => wheel.bike_id === bike.id && wheel.id === part.wheelset_id)), today)
+      return `<div class="gear-row"><div><b>${esc(bike.name)}</b><div class="field-help">${esc(bike.brand || '')} · ${esc(String(bike.odometer_km))} km</div></div>
+        <button class="edit-btn" type="button" data-act="gear-open" data-id="${esc(bike.id)}">${due.length ? due.length + ' 項到期' : '查看'}</button></div>`
+    }).join('') || '<div class="empty-state">還沒有車</div>'}
+    <button class="save-btn" type="button" data-act="gear-add">新增一台車</button>`
+  updateGearBadge()
+}
+async function createBike() {
+  const name = (document.getElementById('gear-name').value || '').trim()
+  const brand = (document.getElementById('gear-brand').value || '').trim()
+  const odo = Number(document.getElementById('gear-odo').value || 0)
+  if (!name) { showToast('請填車名'); return }
+  const inserted = await db.from('bikes').insert({
+    line_user_id: myProfile.line_user_id, name, brand, odometer_km: Number.isFinite(odo) && odo > 0 ? odo : 0, archived: false
+  }).select('id')
+  if (inserted.error) { showToast('沒有存起來'); return }
+  const id = insertedId(inserted)
+  if (DEMO && id) {
+    const bundle = PaceGear.seedBike({ id, line_user_id: myProfile.line_user_id, created_on: taipeiToday() })
+    bundle.wheelset.id = 'wheel-' + id
+    bundle.components.forEach((part, i) => {
+      part.id = 'comp-' + id + '-' + i
+      part.last_service_date = taipeiToday()
+      if (part.wheelset_id) part.wheelset_id = bundle.wheelset.id
+    })
+    await db.from('wheelsets').insert(bundle.wheelset)
+    await db.from('gear_components').insert(bundle.components)
+  }
+  showToast('已建立，含原廠輪組')
+  gearScreen = 'detail'
+  gearBikeId = id
+  await loadGear()
+  renderGear()
+  renderGearReminder()
+}
+async function addWheelset(bikeId) {
+  const name = (document.getElementById('new-wheel').value || '').trim()
+  if (!name) { showToast('請填輪組名稱'); return }
+  const inserted = await db.from('wheelsets').insert({
+    line_user_id: myProfile.line_user_id, bike_id: bikeId, name, brand: '', odometer_km: 0, mounted: false
+  }).select('id')
+  if (inserted.error) { showToast('輪組沒有存起來'); return }
+  const id = insertedId(inserted)
+  if (DEMO && id) {
+    const parts = PaceGear.seedWheelsetComponents({ id, line_user_id: myProfile.line_user_id }).map((part, i) => {
+      part.id = 'comp-' + id + '-' + i
+      part.last_service_date = taipeiToday()
+      return part
+    })
+    await db.from('gear_components').insert(parts)
+  }
+  await loadGear()
+  renderGear()
+}
+async function mountWheelset(id, bikeId) {
+  const res = await db.from('wheelsets').update({ mounted: true }).eq('id', id)
+  if (res.error) { showToast('沒有換成這組'); return }
+  if (DEMO) {
+    gearState.wheelsets.forEach(row => { if (row.bike_id === bikeId) row.mounted = row.id === id })
+    await db.from('wheelsets').update({ mounted: false }).eq('bike_id', bikeId)
+    await db.from('wheelsets').update({ mounted: true }).eq('id', id)
+  }
+  showToast('已換上這組輪組')
+  await loadGear()
+  renderGear()
+}
+async function logGearKm(bikeId) {
+  const km = Number(document.getElementById('log-km').value)
+  const date = document.getElementById('log-date').value
+  const wheelId = document.getElementById('log-wheel').value
+  const indoor = document.getElementById('log-indoor').checked
+  const countChain = document.getElementById('log-chain').checked
+  if (!(km > 0) || !date) { showToast('請填日期和公里'); return }
+  const entry = {
+    line_user_id: myProfile.line_user_id, ride_date: date, km, bike_id: bikeId,
+    wheelset_id: indoor ? null : wheelId, is_indoor: indoor, count_indoor_drivetrain: indoor && countChain
+  }
+  const res = await db.from('mileage_logs').insert(entry)
+  if (res.error) { showToast('里程沒有記上'); return }
+  if (DEMO) {
+    const applied = PaceGear.applyMileage(gearState, entry)
+    if (applied.ok && applied.applied !== 'none') {
+      for (const bike of applied.bikes) await db.from('bikes').update({ odometer_km: bike.odometer_km }).eq('id', bike.id)
+      for (const wheel of applied.wheelsets) await db.from('wheelsets').update({ odometer_km: wheel.odometer_km }).eq('id', wheel.id)
+      for (const part of applied.components) await db.from('gear_components').update({ accumulated_km: part.accumulated_km }).eq('id', part.id)
+    }
+  }
+  showToast(indoor && !countChain ? '已記錄，這筆室內里程沒有計入' : '里程已記入')
+  await loadGear()
+  renderGear()
+  renderGearReminder()
+}
+async function resetGearPart(id) {
+  const part = gearState.components.find(row => row.id === id)
+  if (!part) return
+  const res = await db.from('gear_components').update({
+    last_service_date: taipeiToday(), km_at_last_service: part.accumulated_km || 0
+  }).eq('id', id)
+  if (res.error) { showToast('沒有重設'); return }
+  showToast(part.reminder_kind === 'replace' ? '已記成更換' : '已記成檢查')
+  await loadGear()
+  renderGear()
+  renderGearReminder()
+}
 function renderProfile() {
   if (!myProfile) return
   const me = currentRider()
@@ -1875,6 +2131,7 @@ function renderProfile() {
     }
   }
   paintZones()
+  renderGear()
 }
 function updateColorPreview() {
   const color = safeHex(document.getElementById('inp-name-color').value) || '#ffffff'
@@ -2905,6 +3162,15 @@ function onGlobalClick(e) {
   else if (act === 'bulk-preview') previewBulk()
   else if (act === 'bulk-publish') publishBulk()
   else if (act === 'save-route') saveRoute()
+  else if (act === 'gear-list') { gearScreen = 'list'; renderGear() }
+  else if (act === 'gear-add') { gearScreen = 'add'; renderGear() }
+  else if (act === 'gear-open') { gearScreen = 'detail'; gearBikeId = el.dataset.id; gearFocus = ''; renderGear() }
+  else if (act === 'gear-create') createBike()
+  else if (act === 'gear-wheel') addWheelset(el.dataset.id)
+  else if (act === 'gear-mount') mountWheelset(el.dataset.id, el.dataset.bike)
+  else if (act === 'gear-km') logGearKm(el.dataset.id)
+  else if (act === 'gear-reset') resetGearPart(el.dataset.id)
+  else if (act === 'gear-home') { switchTab('profile'); gearScreen = 'detail'; gearBikeId = el.dataset.bike || gearBikeId; renderGear() }
 }
 function onTouchStart(e) {
   if (e.touches.length !== 1) return

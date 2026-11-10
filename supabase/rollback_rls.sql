@@ -37,6 +37,23 @@ drop policy if exists ride_groups_write on public.ride_groups;
 drop policy if exists ride_templates_all on public.ride_templates;
 drop policy if exists ride_template_groups_all on public.ride_template_groups;
 
+drop trigger if exists zz_gear_apply_mileage on public.mileage_logs;
+drop trigger if exists gear_single_mounted on public.wheelsets;
+drop trigger if exists gear_guard_last_wheelset on public.wheelsets;
+drop trigger if exists gear_seed_wheelset on public.wheelsets;
+drop trigger if exists gear_seed_bike on public.bikes;
+drop trigger if exists gear_stamp_pending on public.pending_activities;
+drop trigger if exists gear_stamp_mileage on public.mileage_logs;
+drop trigger if exists gear_stamp_components on public.gear_components;
+drop trigger if exists gear_stamp_wheelsets on public.wheelsets;
+drop trigger if exists gear_stamp_bikes on public.bikes;
+drop function if exists private.gear_apply_mileage();
+drop function if exists private.gear_single_mounted();
+drop function if exists private.gear_guard_last_wheelset();
+drop function if exists private.gear_seed_bike();
+drop function if exists private.gear_seed_wheelset();
+drop function if exists private.gear_stamp_owner();
+
 drop function if exists private.registrations_check_group();
 drop function if exists private.registrations_stamp_line_id();
 drop function if exists private.riders_lock_privileged_columns();
