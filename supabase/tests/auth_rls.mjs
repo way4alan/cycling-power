@@ -316,6 +316,84 @@ check('rejected category did not stick', (await sql(`select category from public
 const plainRide = await api(admin, 'POST', '/rides', { title: '預設類型', date: '2026-12-21', time: '06:00', location: '愛河' }, 'return=representation')
 check('a new ride without category is sunday', ok(plainRide.status) && plainRide.json?.[0]?.category === 'sunday', plainRide.text)
 
+const anonGear = await api(anon, 'GET', '/bikes?select=id')
+check('anon cannot read bikes', !ok(anonGear.status), anonGear.text)
+const ownBike = await api(member, 'POST', '/bikes', {
+  line_user_id: B, name: 'Madone', brand: 'Trek', odometer_km: 0
+}, 'return=representation')
+check('member can create a bike', ok(ownBike.status) && ownBike.json?.[0]?.id, ownBike.text)
+const bikeId = ownBike.json?.[0]?.id
+check('new bike line id comes from the JWT',
+  (await sql(`select line_user_id from public.bikes where id = '${bikeId}'`)) === A)
+check('creating a bike also creates the factory wheelset',
+  (await sql(`select name || '|' || mounted::text from public.wheelsets where bike_id = '${bikeId}'`)) === '原廠輪組|true')
+check('factory wheelset received sealant and tires',
+  (await sql(`select count(*) from public.gear_components where wheelset_id = (select id from public.wheelsets where bike_id = '${bikeId}')`)) === '2')
+check('the bike received its consumables',
+  (await sql(`select count(*) from public.gear_components where bike_id = '${bikeId}'`)) === '7')
+check('wax is 250 km with no month interval and replacement has no interval',
+  (await sql(`select interval_km::int || '|' || coalesce(interval_months::text, '') || '|' || basis from public.gear_components where bike_id = '${bikeId}' and kind = 'chain_wax'`)) === '250||team'
+  && (await sql(`select coalesce(interval_km::text, '') || '|' || coalesce(interval_months::text, '') from public.gear_components where bike_id = '${bikeId}' and kind = 'chain_replace'`)) === '|')
+check('a new bike starts one chain-replacement record at the current odometer',
+  (await sql(`select count(*)::text || '|' || bike_km::int from public.chain_replacements where bike_id = '${bikeId}' group by bike_km`)) === '1|0')
+const hiddenGear = await api(other, 'GET', `/bikes?id=eq.${bikeId}&select=id,name`)
+check('another member cannot read the bike', ok(hiddenGear.status) && (hiddenGear.json || []).length === 0, hiddenGear.text)
+const adminGear = await api(admin, 'GET', `/bikes?id=eq.${bikeId}&select=id`)
+check('admin does not receive another rider bike', ok(adminGear.status) && (adminGear.json || []).length === 0, adminGear.text)
+const hiddenChain = await api(other, 'GET', `/chain_replacements?bike_id=eq.${bikeId}&select=id`)
+check('another member cannot read chain history', ok(hiddenChain.status) && (hiddenChain.json || []).length === 0, hiddenChain.text)
+const forgedChain = await api(other, 'POST', '/chain_replacements', {
+  line_user_id: A, bike_id: bikeId, replaced_on: '2026-11-10', bike_km: 1, note: '偷記', brand: ''
+})
+check('another member cannot insert chain history', !ok(forgedChain.status), forgedChain.text)
+const ownChain = await api(member, 'POST', '/chain_replacements', {
+  bike_id: bikeId, replaced_on: '2026-11-01', bike_km: 10, note: '磨耗 0.8%', brand: 'KMC'
+}, 'return=representation')
+check('member can record a chain replacement', ok(ownChain.status) && ownChain.json?.[0]?.brand === 'KMC', ownChain.text)
+check('chain history keeps the starting record and the new one',
+  (await sql(`select count(*) from public.chain_replacements where bike_id = '${bikeId}'`)) === '2'
+  && (await sql(`select brand || '|' || note from public.chain_replacements where bike_id = '${bikeId}' and note <> ''`)) === 'KMC|磨耗 0.8%')
+const stealGear = await api(other, 'PATCH', `/bikes?id=eq.${bikeId}`, { name: '偷改' })
+check('another member did not rename the bike',
+  (await sql(`select name from public.bikes where id = '${bikeId}'`)) === 'Madone', stealGear.text)
+const wheelId = await sql(`select id from public.wheelsets where bike_id = '${bikeId}' and mounted`)
+const extraWheel = await api(member, 'POST', '/wheelsets', {
+  bike_id: bikeId, name: 'Bontrager Aeolus', brand: 'Bontrager', mounted: false, odometer_km: 0
+}, 'return=representation')
+check('member can add a second wheelset', ok(extraWheel.status) && extraWheel.json?.[0]?.id, extraWheel.text)
+const extraId = extraWheel.json?.[0]?.id
+const outdoor = await api(member, 'POST', '/mileage_logs', {
+  ride_date: '2026-11-10', km: 20, bike_id: bikeId, wheelset_id: extraId, is_indoor: false
+})
+check('member can log outdoor km', ok(outdoor.status), outdoor.text)
+check('outdoor km landed on the bike and the chosen wheelset',
+  (await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`)) === '20'
+  && (await sql(`select odometer_km::int from public.wheelsets where id = '${extraId}'`)) === '20'
+  && (await sql(`select odometer_km::int from public.wheelsets where id = '${wheelId}'`)) === '0')
+check('outdoor km landed on the chain and that wheelset tire only',
+  (await sql(`select accumulated_km::int from public.gear_components where bike_id = '${bikeId}' and kind = 'chain_wax'`)) === '20'
+  && (await sql(`select accumulated_km::int from public.gear_components where wheelset_id = '${extraId}' and kind = 'tires'`)) === '20'
+  && (await sql(`select accumulated_km::int from public.gear_components where wheelset_id = '${wheelId}' and kind = 'tires'`)) === '0')
+const indoorSkip = await api(member, 'POST', '/mileage_logs', {
+  ride_date: '2026-11-10', km: 15, bike_id: bikeId, is_indoor: true, count_indoor_drivetrain: false
+})
+check('indoor km without the chain tick is stored but not added', ok(indoorSkip.status), indoorSkip.text)
+check('skipped indoor km did not move the odometer',
+  (await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`)) === '20')
+const indoorCount = await api(member, 'POST', '/mileage_logs', {
+  ride_date: '2026-11-10', km: 15, bike_id: bikeId, is_indoor: true, count_indoor_drivetrain: true
+})
+check('indoor km can count for the bike and chain', ok(indoorCount.status), indoorCount.text)
+check('ticked indoor km skipped the wheelset',
+  (await sql(`select odometer_km::int from public.bikes where id = '${bikeId}'`)) === '35'
+  && (await sql(`select accumulated_km::int from public.gear_components where bike_id = '${bikeId}' and kind = 'chain_wax'`)) === '35'
+  && (await sql(`select accumulated_km::int from public.gear_components where bike_id = '${bikeId}' and kind = 'brake_pads'`)) === '20'
+  && (await sql(`select odometer_km::int from public.wheelsets where id = '${extraId}'`)) === '20')
+const foreignWheel = await api(member, 'POST', '/mileage_logs', {
+  ride_date: '2026-11-10', km: 5, bike_id: bikeId, wheelset_id: wheelId, is_indoor: false
+})
+check('a wheelset on the same bike is accepted', ok(foreignWheel.status), foreignWheel.text)
+
 const mock = http.createServer((req, res) => {
   let data = ''
   req.on('data', (chunk) => { data += chunk })

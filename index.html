@@ -44,7 +44,7 @@
       <span data-icon="map-pin" data-size="22"></span><span class="nav-label">團騎</span>
     </button>
     <button class="nav-btn" type="button" data-nav="profile" data-act="tab" data-tab="profile">
-      <span data-icon="user" data-size="22"></span><span class="nav-label">我的</span>
+      <span data-icon="user" data-size="22"></span><span class="nav-label">我的</span><span class="gear-nav-badge" hidden></span>
     </button>
   </aside>
 
@@ -72,6 +72,7 @@
       <main class="content" id="content">
         <div id="tab-leaderboard" class="tab-panel active">
           <section id="next-ride" class="next-ride" aria-live="polite"></section>
+          <p id="gear-reminder" class="gear-reminder" hidden></p>
           <div class="lb-grid">
             <div class="lb-primary">
               <div class="cat-filters" id="cat-filters">
@@ -236,6 +237,7 @@
             <div id="zone-visual"></div>
           </div>
           <div id="badge-wall"></div>
+          <section id="gear-garage" class="card gear-garage" hidden></section>
           <div id="admin-entry"></div>
           <div class="card form-card" id="profile-form">
             <h2 class="pace-section-title">編輯資料</h2>
@@ -330,7 +332,7 @@
       <span data-icon="map-pin" data-size="20"></span><span class="nav-label">團騎</span>
     </button>
     <button class="nav-btn" type="button" data-nav="profile" data-act="tab" data-tab="profile">
-      <span data-icon="user" data-size="20"></span><span class="nav-label">我的</span>
+      <span data-icon="user" data-size="20"></span><span class="nav-label">我的</span><span class="gear-nav-badge" hidden></span>
     </button>
   </nav>
 </div>
@@ -360,6 +362,7 @@
 </div>
 <canvas id="confetti"></canvas>
 <script src="lib/pace-core.js"></script>
+<script src="lib/gear.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 </body>

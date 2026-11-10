@@ -6,11 +6,12 @@ const { JSDOM } = require('jsdom')
 
 const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8')
 const core = readFileSync(new URL('../../lib/pace-core.js', import.meta.url), 'utf8')
+const gear = readFileSync(new URL('../../lib/gear.js', import.meta.url), 'utf8')
 const icons = readFileSync(new URL('../../icons.js', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../../app.js', import.meta.url), 'utf8')
 
 function boot(url) {
-  const page = html.replace('</body>', `<script>${core}<\/script><script>${icons}<\/script><script>${app}<\/script></body>`)
+  const page = html.replace('</body>', `<script>${core}<\/script><script>${gear}<\/script><script>${icons}<\/script><script>${app}<\/script></body>`)
   return new JSDOM(page, { url, runScripts: 'dangerously', pretendToBeVisual: true })
 }
 
