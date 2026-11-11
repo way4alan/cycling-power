@@ -7,6 +7,7 @@ export const STRAVA_CLIENT_ID = '295868'
 export const STRAVA_REDIRECT_URI = 'https://cycling-power.vercel.app/?strava=callback'
 export const STRAVA_SCOPE = 'activity:read_all,profile:read_all'
 export const STRAVA_AUTHORIZE = 'https://www.strava.com/oauth/authorize'
+export const STRAVA_MOBILE_AUTHORIZE = 'https://www.strava.com/oauth/mobile/authorize'
 export const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token'
 export const STRAVA_DEAUTHORIZE_URL = 'https://www.strava.com/oauth/deauthorize'
 
@@ -212,8 +213,8 @@ export function activityDay(activity: StravaActivity): string {
   return raw.slice(0, 10)
 }
 
-export function authorizeUrl(state: string, clientId = STRAVA_CLIENT_ID): string {
-  const url = new URL(STRAVA_AUTHORIZE)
+export function authorizeUrl(state: string, clientId = STRAVA_CLIENT_ID, mobile = false): string {
+  const url = new URL(mobile ? STRAVA_MOBILE_AUTHORIZE : STRAVA_AUTHORIZE)
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('redirect_uri', STRAVA_REDIRECT_URI)
@@ -408,7 +409,7 @@ async function handleStravaAuthBody(
 
   if (action === 'start') {
     const state = await issueState(lineUserId, stravaSecret, store)
-    return json(200, { url: authorizeUrl(state, clientId(env)) })
+    return json(200, { url: authorizeUrl(state, clientId(env), body.mobile === true) })
   }
 
   if (action === 'exchange') {

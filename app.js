@@ -38,14 +38,22 @@ const ZONE_META = [
 ]
 
 const params = new URLSearchParams(location.search)
+function stravaStores() {
+  const stores = []
+  try { if (sessionStorage) stores.push(sessionStorage) } catch (e) { /* ignore */ }
+  try { if (localStorage) stores.push(localStorage) } catch (e) { /* ignore */ }
+  return stores
+}
 function stashStravaCallback() {
-  try {
-    if (params.get('strava') !== 'callback') return
-    const code = params.get('code') || ''
-    const state = params.get('state') || ''
-    const error = params.get('error') || ''
-    if ((code && state) || error) sessionStorage.setItem('pace-strava-oauth', JSON.stringify({ code, state, error }))
-  } catch (e) { /* 無痕模式不能暫存時，網址上的 code 仍會在登入後用到 */ }
+  if (!globalThis.PaceGear) return
+  const parsed = PaceGear.parseStravaCallback(location.search)
+  if (parsed) PaceGear.persistStravaCallback(parsed, stravaStores())
+}
+function lineLoginRedirect() {
+  stashStravaCallback()
+  const saved = globalThis.PaceGear ? PaceGear.readStravaCallback(stravaStores()) : null
+  const next = saved && PaceGear.stravaLoginRedirect(saved)
+  return next || location.href
 }
 stashStravaCallback()
 const DEMO = params.get('demo') === '1'
@@ -79,6 +87,7 @@ let gearBikeId = ''
 let gearPartId = ''
 let gearAdvanced = false
 let stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
+let stravaReturn = null
 let rideState = { rides: [], regs: [], groups: [], atts: [], routes: [], templates: [], templateGroups: [] }
 let rankingCtx = { rides: [], attendances: [], error: null }
 let publishLock = false
@@ -1104,6 +1113,12 @@ function openRequestedPanel() {
       : (open === 'strava-pending') ? 'strava-ride' : ''
     renderGear()
   }
+  if (open === 'strava-ok' || open === 'strava-denied' || open === 'strava-retry') {
+    stravaReturn = PaceGear.stravaCallbackScreen(
+      open === 'strava-ok' ? { ok: true } : { error: open === 'strava-retry' ? 'invalid_state' : 'access_denied' }
+    )
+    renderStravaReturn()
+  }
   if (open === 'announce') {
     const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
     const id = safeRide && (rideState.rides || []).some(r => r.id === safeRide) ? safeRide : fallback
@@ -1193,7 +1208,7 @@ async function refreshLineSession(force) {
 async function requestLineSession() {
   const idToken = typeof liff !== 'undefined' && liff.getIDToken ? liff.getIDToken() : ''
   if (!idToken) {
-    liff.login({ redirectUri: location.href })
+    liff.login({ redirectUri: lineLoginRedirect() })
     return null
   }
   const res = await fetch(authFunctionUrl(), {
@@ -1203,7 +1218,7 @@ async function requestLineSession() {
   })
   if (res.status === 401) {
     try { liff.logout() } catch (e) { /* 重新登入仍要進行 */ }
-    liff.login({ redirectUri: location.href })
+    liff.login({ redirectUri: lineLoginRedirect() })
     return null
   }
   if (!res.ok) throw new Error('line-auth')
@@ -1538,7 +1553,7 @@ async function init() {
       await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0')
       await loadScript('https://static.line-scdn.net/liff/edge/2/sdk.js')
       await liff.init({ liffId: LIFF_ID })
-      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return }
+      if (!liff.isLoggedIn()) { liff.login({ redirectUri: lineLoginRedirect() }); return }
       const profile = await liff.getProfile()
       myProfile = { line_user_id: profile.userId, name: profile.displayName, avatar_url: profile.pictureUrl || '' }
       const token = await refreshLineSession(true)
@@ -2283,15 +2298,29 @@ async function saveStravaMap(select) {
   if (bike) bike.strava_gear_id = value
   showToast('已對應')
 }
+function renderStravaReturn() {
+  const host = document.getElementById('strava-return')
+  if (!host) return
+  if (!stravaReturn) { host.hidden = true; host.innerHTML = ''; return }
+  host.hidden = false
+  host.innerHTML = `<div class="strava-return-card">
+    <h2>${esc(stravaReturn.title)}</h2>
+    <p>${esc(stravaReturn.body)}</p>
+    <a class="save-btn" href="https://liff.line.me/${esc(LIFF_ID)}">回到 LINE</a>
+  </div>`
+}
 async function connectStrava() {
   if (DEMO) { showToast('示範不會連到 Strava'); return }
-  const result = await stravaAction('start')
-  const url = result && result.body && result.body.url
+  const mobile = PaceGear.isMobileStravaClient(navigator.userAgent)
+  const result = await stravaAction('start', { mobile })
+  const raw = result && result.body && result.body.url
+  const plan = raw ? PaceGear.stravaConnectPlan(raw, navigator.userAgent, typeof liff !== 'undefined' && typeof liff.isInClient === 'function' && liff.isInClient()) : null
+  const url = plan && plan.url
   if (!result || !result.ok || !url || !url.includes('client_id=' + STRAVA_CLIENT_ID) || !decodeURIComponent(url).includes(STRAVA_REDIRECT_URI) || !decodeURIComponent(url).includes(STRAVA_SCOPE)) {
     showToast('現在無法連結')
     return
   }
-  if (typeof liff !== 'undefined' && typeof liff.isInClient === 'function' && liff.isInClient()) {
+  if (plan.open === 'liff-external') {
     liff.openWindow({ url, external: true })
     return
   }
@@ -2361,17 +2390,24 @@ async function confirmStravaRide(id) {
   renderGearReminder()
 }
 async function finishStravaOAuth() {
-  let saved = null
-  try { saved = JSON.parse(sessionStorage.getItem('pace-strava-oauth') || 'null') } catch (e) { saved = null }
-  if (!saved && params.get('strava') === 'callback') {
-    saved = { code: params.get('code') || '', state: params.get('state') || '', error: params.get('error') || '' }
-  }
+  stashStravaCallback()
+  const saved = PaceGear.readStravaCallback(stravaStores())
   if (!saved || (!saved.code && !saved.error)) return
-  try { sessionStorage.removeItem('pace-strava-oauth') } catch (e) { /* ignore */ }
-  if (saved.error || !saved.code || !saved.state) { showToast('沒有完成連結'); return }
+  PaceGear.forgetStravaCallback(stravaStores())
+  if (saved.error || !saved.code || !saved.state) {
+    stravaReturn = PaceGear.stravaCallbackScreen({ error: saved.error || 'failed' })
+    renderStravaReturn()
+    return
+  }
   const result = await stravaAction('exchange', { code: saved.code, state: saved.state })
-  if (!result || !result.ok) { showToast('連結沒有完成'); return }
-  showToast('已連結 Strava')
+  if (!result || !result.ok) {
+    const reason = result && result.body && result.body.error === 'invalid_state' ? 'invalid_state' : 'failed'
+    stravaReturn = PaceGear.stravaCallbackScreen({ error: reason })
+    renderStravaReturn()
+    return
+  }
+  stravaReturn = PaceGear.stravaCallbackScreen({ ok: true })
+  renderStravaReturn()
   gearOpen = true
   await loadGear()
   renderGear()
