@@ -239,6 +239,38 @@ test('strava import auto-assigns one setup, asks which bike otherwise, and sugge
   assert.equal(suggested[0].suggested, true)
 })
 
+test('strava authorize uses the mobile endpoint on phones and keeps the callback across login', () => {
+  const desktop = 'https://www.strava.com/oauth/authorize?client_id=295868&redirect_uri=https%3A%2F%2Fcycling-power.vercel.app%2F%3Fstrava%3Dcallback&response_type=code&state=abc'
+  const iphone = G.stravaConnectPlan(desktop, 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', true)
+  assert.equal(iphone.open, 'liff-external')
+  assert.equal(new URL(iphone.url).pathname, '/oauth/mobile/authorize')
+  assert.equal(new URL(iphone.url).searchParams.get('state'), 'abc')
+  assert.equal(new URL(iphone.url).searchParams.get('redirect_uri'), 'https://cycling-power.vercel.app/?strava=callback')
+  const android = G.stravaConnectPlan(desktop, 'Mozilla/5.0 (Linux; Android 14; Pixel 8)', false)
+  assert.equal(android.open, 'assign')
+  assert.equal(new URL(android.url).pathname, '/oauth/mobile/authorize')
+  const mac = G.stravaConnectPlan(iphone.url, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', false)
+  assert.equal(new URL(mac.url).pathname, '/oauth/authorize')
+  assert.equal(mac.open, 'assign')
+  const parsed = G.parseStravaCallback('?strava=callback&code=the-code&state=the-state')
+  const session = new Map()
+  const local = new Map()
+  const store = (map) => ({
+    getItem: (key) => map.get(key) || null,
+    setItem: (key, value) => map.set(key, value),
+    removeItem: (key) => map.delete(key)
+  })
+  G.persistStravaCallback(parsed, [store(session), store(local)])
+  session.clear()
+  assert.deepEqual(G.readStravaCallback([store(session), store(local)]), { code: 'the-code', state: 'the-state', error: '' })
+  assert.equal(G.stravaLoginRedirect(parsed), 'https://cycling-power.vercel.app/?strava=callback&code=the-code&state=the-state')
+  assert.equal(G.stravaCallbackScreen({ ok: true }).title, '已連結 Strava')
+  assert.equal(G.stravaCallbackScreen({ error: 'access_denied' }).title, '沒有完成授權')
+  assert.equal(G.stravaCallbackScreen({ error: 'invalid_state' }).title, '請回 App 再按一次連結')
+  G.forgetStravaCallback([store(local)])
+  assert.equal(G.readStravaCallback([store(session), store(local)]), null)
+})
+
 test('strava import only keeps bike sports and auto-assigns a single setup', () => {
   assert.equal(G.classifyStravaSport('Ride').action, 'import')
   assert.equal(G.classifyStravaSport('GravelRide').indoor, false)
