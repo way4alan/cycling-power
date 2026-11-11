@@ -415,6 +415,10 @@ async function handleStravaAuthBody(
   if (action === 'exchange') {
     const code = typeof body.code === 'string' ? body.code : ''
     const state = typeof body.state === 'string' ? body.state : ''
+    const scope = typeof body.scope === 'string' ? body.scope : ''
+    if (scope && !scope.split(/[,\s]+/).includes('activity:read_all')) {
+      return json(400, { error: 'missing_scope' })
+    }
     const nonce = await verifyState(state, stravaSecret, lineUserId)
     if (!code || !nonce) return json(400, { error: 'invalid_state' })
     if (!await store.consumeState(nonce, lineUserId)) return json(400, { error: 'invalid_state' })

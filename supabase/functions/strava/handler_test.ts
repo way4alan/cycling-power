@@ -182,6 +182,36 @@ Deno.test('oauth state is tied to the rider and rejects another rider or a bad s
   assertEquals(rejected.status, 400)
 })
 
+Deno.test('exchange rejects a grant that did not include activity read', async () => {
+  const store = memoryStore()
+  const user = await devSignUser(USER, SECRET)
+  const started = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'start' }),
+    }),
+    env(),
+    jsonFetch({}),
+    store,
+  )
+  const state = new URL((await started.json()).url).searchParams.get('state')
+  const rejected = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'exchange', code: 'code-1', state, scope: 'profile:read_all' }),
+    }),
+    env(),
+    jsonFetch({}),
+    store,
+  )
+  const text = await rejected.text()
+  assertEquals(rejected.status, 400)
+  assertEquals(text, '{"error":"missing_scope"}')
+  assertEquals(text.includes(STRAVA_SECRET), false)
+})
+
 Deno.test('exchange stores a connection without returning the token, and a second use of state fails', async () => {
   const store = memoryStore()
   const user = await devSignUser(USER, SECRET)

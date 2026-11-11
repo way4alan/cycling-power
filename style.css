@@ -825,11 +825,7 @@ input[type=range]::-moz-range-thumb {
 .strava-actions { display: flex; gap: 8px; margin-top: 8px; }
 .strava-actions .cancel-btn { flex: 1; width: auto; }
 .strava-card select { width: 100%; }
-.strava-return {
-  position: fixed; z-index: 70; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: rgba(8, 11, 18, .94);
-}
+.strava-return { margin: 0 0 12px; }
 .strava-return-card {
   width: min(420px, 100%); text-align: center;
   background: var(--card); border: 1px solid rgba(230, 43, 138, .45);

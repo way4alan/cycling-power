@@ -45,9 +45,19 @@ function stravaStores() {
   return stores
 }
 function stashStravaCallback() {
-  if (!globalThis.PaceGear) return
-  const parsed = PaceGear.parseStravaCallback(location.search)
+  if (!globalThis.PaceGear) return null
+  const pending = PaceGear.readStravaPending(stravaStores())
+  const parsed = PaceGear.parseStravaCallback(location.search, pending)
   if (parsed) PaceGear.persistStravaCallback(parsed, stravaStores())
+  return parsed
+}
+function cleanStravaQuery() {
+  if (DEMO || !stashStravaCallback()) return
+  try {
+    const url = new URL(location.href)
+    ;['strava', 'code', 'state', 'scope', 'error', 'error_description'].forEach(key => url.searchParams.delete(key))
+    history.replaceState(null, '', url.pathname + url.search + url.hash)
+  } catch (e) { /* keep the address if history is unavailable */ }
 }
 function lineLoginRedirect() {
   stashStravaCallback()
@@ -58,6 +68,7 @@ function lineLoginRedirect() {
 stashStravaCallback()
 const DEMO = params.get('demo') === '1'
 const DEMO_ADMIN = DEMO && params.get('admin') === '1'
+cleanStravaQuery()
 
 let db = null
 let myProfile = null
@@ -1117,7 +1128,17 @@ function openRequestedPanel() {
     stravaReturn = PaceGear.stravaCallbackScreen(
       open === 'strava-ok' ? { ok: true } : { error: open === 'strava-retry' ? 'invalid_state' : 'access_denied' }
     )
+    switchTab('profile')
+    gearOpen = true
     renderStravaReturn()
+    renderGear()
+  }
+  if (DEMO && !open && PaceGear.parseStravaCallback(location.search, PaceGear.readStravaPending(stravaStores()))) {
+    stravaReturn = { kind: 'success', title: '已接到 Strava 授權', body: '這個回傳網址可以完成連結。示範不會真的連到 Strava。' }
+    switchTab('profile')
+    gearOpen = true
+    renderStravaReturn()
+    renderGear()
   }
   if (open === 'announce') {
     const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
@@ -2017,7 +2038,7 @@ function bikeCard(bike, today) {
 function demoStrava() {
   if (stravaLink.demoReady) return stravaLink
   const open = params.get('open')
-  const connected = open === 'strava-connected' || open === 'strava-pending'
+  const connected = open === 'strava-connected' || open === 'strava-pending' || open === 'strava-ok'
   return {
     connected,
     demoReady: true,
@@ -2320,6 +2341,7 @@ async function connectStrava() {
     showToast('現在無法連結')
     return
   }
+  PaceGear.rememberStravaStart(url, stravaStores())
   if (plan.open === 'liff-external') {
     liff.openWindow({ url, external: true })
     return
@@ -2389,26 +2411,35 @@ async function confirmStravaRide(id) {
   renderGear()
   renderGearReminder()
 }
+function showStravaResult(screen) {
+  stravaReturn = screen
+  switchTab('profile')
+  gearOpen = true
+  renderStravaReturn()
+  renderGear()
+}
 async function finishStravaOAuth() {
-  stashStravaCallback()
-  const saved = PaceGear.readStravaCallback(stravaStores())
-  if (!saved || (!saved.code && !saved.error)) return
+  const pending = PaceGear.readStravaPending(stravaStores())
+  const parsed = stashStravaCallback()
+  const saved = parsed || PaceGear.readStravaCallback(stravaStores())
+  if (!saved || (!saved.code && !saved.error)) {
+    if (PaceGear.stravaCallbackMiss(location.search, pending)) showStravaResult(PaceGear.stravaCallbackScreen({ error: 'invalid_state' }))
+    return
+  }
   PaceGear.forgetStravaCallback(stravaStores())
   if (saved.error || !saved.code || !saved.state) {
-    stravaReturn = PaceGear.stravaCallbackScreen({ error: saved.error || 'failed' })
-    renderStravaReturn()
+    showStravaResult(PaceGear.stravaCallbackScreen({ error: saved.error || 'failed' }))
     return
   }
-  const result = await stravaAction('exchange', { code: saved.code, state: saved.state })
+  const result = await stravaAction('exchange', { code: saved.code, state: saved.state, scope: saved.scope || '' })
   if (!result || !result.ok) {
-    const reason = result && result.body && result.body.error === 'invalid_state' ? 'invalid_state' : 'failed'
-    stravaReturn = PaceGear.stravaCallbackScreen({ error: reason })
-    renderStravaReturn()
+    const reason = result && result.body && result.body.error
+    showStravaResult(PaceGear.stravaCallbackScreen({
+      error: reason === 'invalid_state' || reason === 'missing_scope' ? reason : 'failed'
+    }))
     return
   }
-  stravaReturn = PaceGear.stravaCallbackScreen({ ok: true })
-  renderStravaReturn()
-  gearOpen = true
+  showStravaResult(PaceGear.stravaCallbackScreen({ ok: true }))
   await loadGear()
   renderGear()
 }
