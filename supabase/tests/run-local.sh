@@ -59,6 +59,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261110150000_gear_garage.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261110180000_strava_sync.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261110180000_strava_sync.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261111180000_strava_backend_qualify.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261111180000_strava_backend_qualify.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
@@ -92,6 +94,9 @@ deno test --allow-env "$ROOT/supabase/functions/line-auth/handler_test.ts" "$ROO
 
 echo "== http rls =="
 PACE_API=http://127.0.0.1:54321 node "$ROOT/supabase/tests/auth_rls.mjs"
+
+echo "== strava backend sql =="
+node "$ROOT/supabase/tests/strava_backend.mjs"
 
 if [[ ! -d /tmp/pace-jsdom/node_modules/jsdom ]]; then
   mkdir -p /tmp/pace-jsdom
