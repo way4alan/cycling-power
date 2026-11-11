@@ -121,6 +121,29 @@ function jsonFetch(routes: Record<string, unknown>): typeof fetch {
   }) as typeof fetch
 }
 
+Deno.test('start returns a clean 500 when the backend fails', async () => {
+  const store = memoryStore()
+  store.putState = async () => {
+    throw new Error('secret-access-token-leak nonce=private')
+  }
+  const user = await devSignUser(USER, SECRET)
+  const started = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'start' }),
+    }),
+    env(),
+    jsonFetch({}),
+    store,
+  )
+  const text = await started.text()
+  assertEquals(started.status, 500)
+  assertEquals(text, '{"error":"server_error"}')
+  assertEquals(text.includes('secret-access'), false)
+  assertEquals(text.includes('nonce'), false)
+})
+
 Deno.test('oauth state is tied to the rider and rejects another rider or a bad signature', async () => {
   const store = memoryStore()
   const user = await devSignUser(USER, SECRET)

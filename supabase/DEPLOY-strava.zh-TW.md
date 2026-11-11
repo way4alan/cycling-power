@@ -31,7 +31,7 @@ supabase/tests/run-local.sh
 
 ## 3. 正式資料庫
 
-SQL Editor 只貼 `supabase/migrations/20261110180000_strava_sync.sql` 再 Run。可再執行一次。既有的車和里程不會被刪。
+若 `20261110180000_strava_sync.sql` 還沒跑，先貼那一支。已經上過的環境再貼 `supabase/migrations/20261111180000_strava_backend_qualify.sql`（只替換 `strava_backend`，修掉 nonce 變數和欄位同名）。兩支都可以再執行一次。既有的車和里程不會被刪。
 
 只想收回這一版：`supabase/rollback_strava.sql`（token 會刪；已經記入的里程還在）。
 

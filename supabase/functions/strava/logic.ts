@@ -391,14 +391,12 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
-export async function handleStravaAuth(
+async function handleStravaAuthBody(
   req: Request,
   env: EnvSource,
   fetchImpl: typeof fetch,
   store: Store,
 ): Promise<Response> {
-  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
-  if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' })
   const secret = jwtSecret(env)
   const stravaSecret = clientSecret(env)
   if (secret.length < 32 || stravaSecret.length < 8) return json(500, { error: 'server_misconfigured' })
@@ -480,6 +478,22 @@ export async function handleStravaAuth(
   }
 
   return json(400, { error: 'invalid_request' })
+}
+
+export async function handleStravaAuth(
+  req: Request,
+  env: EnvSource,
+  fetchImpl: typeof fetch,
+  store: Store,
+): Promise<Response> {
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
+  if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' })
+  try {
+    return await handleStravaAuthBody(req, env, fetchImpl, store)
+  } catch {
+    console.error('strava-auth', 'failed')
+    return json(500, { error: 'server_error' })
+  }
 }
 
 export async function handleStravaWebhook(

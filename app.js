@@ -2291,6 +2291,10 @@ async function connectStrava() {
     showToast('現在無法連結')
     return
   }
+  if (typeof liff !== 'undefined' && typeof liff.isInClient === 'function' && liff.isInClient()) {
+    liff.openWindow({ url, external: true })
+    return
+  }
   location.assign(url)
 }
 async function syncStrava() {
