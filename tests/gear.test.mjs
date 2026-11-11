@@ -262,13 +262,34 @@ test('strava authorize uses the mobile endpoint on phones and keeps the callback
   })
   G.persistStravaCallback(parsed, [store(session), store(local)])
   session.clear()
-  assert.deepEqual(G.readStravaCallback([store(session), store(local)]), { code: 'the-code', state: 'the-state', error: '' })
+  assert.deepEqual(G.readStravaCallback([store(session), store(local)]), { code: 'the-code', state: 'the-state', scope: '', error: '' })
   assert.equal(G.stravaLoginRedirect(parsed), 'https://cycling-power.vercel.app/?strava=callback&code=the-code&state=the-state')
   assert.equal(G.stravaCallbackScreen({ ok: true }).title, '已連結 Strava')
   assert.equal(G.stravaCallbackScreen({ error: 'access_denied' }).title, '沒有完成授權')
   assert.equal(G.stravaCallbackScreen({ error: 'invalid_state' }).title, '請回 App 再按一次連結')
   G.forgetStravaCallback([store(local)])
   assert.equal(G.readStravaCallback([store(session), store(local)]), null)
+  assert.deepEqual(G.parseStravaCallback('?strava=callback&code=c1&state=s1&scope=activity:read_all'), {
+    code: 'c1', state: 's1', scope: 'activity:read_all', error: ''
+  })
+  assert.deepEqual(G.parseStravaCallback('?strava=callback?code=c2&state=s2&scope=activity:read_all,profile:read_all'), {
+    code: 'c2', state: 's2', scope: 'activity:read_all,profile:read_all', error: ''
+  })
+  assert.deepEqual(G.parseStravaCallback('?strava=' + encodeURIComponent('callback?code=c3&state=s3&scope=activity:read_all')), {
+    code: 'c3', state: 's3', scope: 'activity:read_all', error: ''
+  })
+  assert.deepEqual(G.parseStravaCallback('?code=c4&state=s4&scope=read,activity:read_all,profile:read_all'), {
+    code: 'c4', state: 's4', scope: 'read,activity:read_all,profile:read_all', error: ''
+  })
+  assert.deepEqual(G.parseStravaCallback('?code=c5&state=pending-state', 'pending-state'), {
+    code: 'c5', state: 'pending-state', scope: '', error: ''
+  })
+  assert.equal(G.parseStravaCallback('?code=line-code&state=line-state'), null)
+  assert.equal(G.parseStravaCallback('?code=line-code&state=line-state&liffClientId=2010470481'), null)
+  assert.equal(G.parseStravaCallback('?code=line-code&state=line-state', 'some-other-state'), null)
+  assert.equal(G.parseStravaCallback('?error=access_denied&state=s6').error, 'access_denied')
+  assert.equal(G.stravaCallbackMiss('?strava=callback', ''), true)
+  assert.equal(G.stravaCallbackMiss('?code=line-code&state=line-state', 'pending-state'), false)
 })
 
 test('strava import only keeps bike sports and auto-assigns a single setup', () => {
