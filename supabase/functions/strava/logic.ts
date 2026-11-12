@@ -2,6 +2,7 @@
 // token 交換與重新整理只在這個函式裡用 STRAVA_CLIENT_SECRET，不會回給瀏覽器。
 
 import { signSupabaseJwt } from '../line-auth/handler.ts'
+import { detectActivity, matchGroupRide, viewFromStrava, type RideWindow } from './summit.ts'
 
 export const STRAVA_CLIENT_ID = '295868'
 export const STRAVA_REDIRECT_URI = 'https://cycling-power.vercel.app/?strava=callback'
@@ -53,6 +54,11 @@ export type StravaActivity = {
   start_date?: string
   start_date_local?: string
   gear_id?: string | null
+  device_name?: string
+  total_elevation_gain?: number
+  elev_high?: number
+  elapsed_time?: number
+  map?: { summary_polyline?: string }
 }
 
 export type Store = {
@@ -70,6 +76,14 @@ export type Store = {
   }>
   apply(row: Record<string, unknown>): Promise<Record<string, unknown>>
   removeActivity(lineUserId: string, externalId: string): Promise<void>
+  forgetCache?(lineUserId: string): Promise<void>
+  purgeCache?(): Promise<void>
+  saveOffers?(lineUserId: string, offers: { key: string; tier: string; earned_on: string; historical: boolean }[]): Promise<void>
+  saveCheckin?(lineUserId: string, ride: { id?: string; title?: string; date?: string }): Promise<void>
+  openRides?(): Promise<RideWindow[]>
+  scanUsed?(lineUserId: string): Promise<boolean>
+  markScanned?(lineUserId: string): Promise<void>
+  noteDevice?(lineUserId: string, externalId: string, deviceName: string): Promise<void>
 }
 
 const CORS = {
@@ -337,7 +351,8 @@ async function applyOne(
   const km = activityKm(activity.distance)
   const day = activityDay(activity)
   if (km == null || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return { status: 'ignored' }
-  return store.apply({
+  await rememberPace(lineUserId, activity, store, false)
+  const applied = await store.apply({
     line_user_id: lineUserId,
     external_id: String(activity.id),
     sport_type: sport,
@@ -352,6 +367,26 @@ async function applyOne(
     wheelset_id: plan.wheelsetId || '',
     count_indoor: false,
   })
+  if (activity.device_name && store.noteDevice) await store.noteDevice(lineUserId, String(activity.id), activity.device_name)
+  return applied
+}
+
+async function rememberPace(lineUserId: string, activity: StravaActivity, store: Store, historical: boolean) {
+  const view = viewFromStrava(activity)
+  const offers = detectActivity(view).map((row) => ({
+    key: row.key,
+    tier: row.tier,
+    earned_on: view.localDate || '',
+    historical,
+  }))
+  if (offers.length && store.saveOffers && /^\d{4}-\d{2}-\d{2}$/.test(offers[0].earned_on)) {
+    await store.saveOffers(lineUserId, offers)
+  }
+  if (!historical && store.openRides && store.saveCheckin) {
+    const rides = await store.openRides()
+    const hit = rides.find((ride) => matchGroupRide(view, ride))
+    if (hit) await store.saveCheckin(lineUserId, { id: hit.id, title: hit.title, date: hit.date })
+  }
 }
 
 export async function syncActivities(
@@ -362,6 +397,7 @@ export async function syncActivities(
 ): Promise<{ imported: number }> {
   const fresh = await refreshToken(token, env, fetchImpl, store)
   if (!fresh) return { imported: 0 }
+  if (store.purgeCache) await store.purgeCache()
   const after = fresh.last_sync_at
     ? Math.floor(new Date(fresh.last_sync_at).getTime() / 1000) - 3600
     : Math.floor(Date.now() / 1000) - 30 * 24 * 3600
@@ -455,11 +491,45 @@ async function handleStravaAuthBody(
       headers: { authorization: `Bearer ${fresh.access_token}` },
     })
     if (!res.ok) return json(502, { error: 'strava_unreachable' })
-    const athlete = await res.json() as { bikes?: { id?: string; name?: string }[] }
+    const athlete = await res.json() as { bikes?: { id?: string; name?: string }[]; ftp?: number }
     const bikes = (athlete.bikes || [])
       .filter((bike) => bike.id && bike.name)
       .map((bike) => ({ id: String(bike.id), name: String(bike.name) }))
-    return json(200, { bikes })
+    const ftp = Number(athlete.ftp)
+    return json(200, { bikes, ftp: Number.isFinite(ftp) && ftp > 0 ? Math.round(ftp) : null })
+  }
+
+  if (action === 'history_scan') {
+    if (!store.scanUsed || !store.markScanned || !store.saveOffers) return json(400, { error: 'unavailable' })
+    if (await store.scanUsed(lineUserId)) return json(409, { error: 'already_scanned' })
+    const token = await store.getToken({ line_user_id: lineUserId })
+    if (!token) return json(404, { error: 'not_connected' })
+    const fresh = await refreshToken(token, env, fetchImpl, store)
+    if (!fresh) return json(502, { error: 'strava_unreachable' })
+    let offers = 0
+    for (let page = 1; page <= 4; page++) {
+      const url = `https://www.strava.com/api/v3/athlete/activities?page=${page}&per_page=50`
+      const res = await fetchImpl(url, { headers: { authorization: `Bearer ${fresh.access_token}` } })
+      if (!res.ok) break
+      const list = await res.json() as StravaActivity[]
+      if (!Array.isArray(list) || !list.length) break
+      for (const activity of list) {
+        const view = viewFromStrava(activity)
+        const found = detectActivity(view).filter((row) => row.key !== 'team')
+        if (found.length && /^\d{4}-\d{2}-\d{2}$/.test(view.localDate || '')) {
+          await store.saveOffers(lineUserId, found.map((row) => ({
+            key: row.key,
+            tier: row.tier,
+            earned_on: view.localDate || '',
+            historical: true,
+          })))
+          offers += found.length
+        }
+      }
+      if (list.length < 50) break
+    }
+    await store.markScanned(lineUserId)
+    return json(200, { offers })
   }
 
   if (action === 'sync') {
@@ -479,7 +549,8 @@ async function handleStravaAuthBody(
       })
       await store.deleteToken({ line_user_id: lineUserId })
     }
-    return json(200, { connected: false })
+    if (store.forgetCache) await store.forgetCache(lineUserId)
+    return json(200, { connected: false, deleted: true })
   }
 
   return json(400, { error: 'invalid_request' })
@@ -527,7 +598,9 @@ export async function handleStravaWebhook(
   const updates = (body.updates || {}) as { authorized?: string }
   if (!Number.isFinite(ownerId)) return json(200, { ok: true })
   if (objectType === 'athlete' && String(updates.authorized) === 'false') {
+    const token = await store.getToken({ athlete_id: ownerId })
     await store.deleteToken({ athlete_id: ownerId })
+    if (token && store.forgetCache) await store.forgetCache(token.line_user_id)
     return json(200, { ok: true })
   }
   if (objectType !== 'activity') return json(200, { ok: true })
