@@ -181,6 +181,25 @@ test('round island stays off until all four gates are configured', () => {
   assert.equal(C.roundIsland(parts, gates), null)
 })
 
+test('badge prompts keep one row per badge and group a ride together', () => {
+  const rows = [
+    { id: 'a1', badge_key: 'alishan', earned_on: '2026-05-03', strava_activity_id: '11', activity_name: '再騎阿里山', started_at: '2026-05-03T05:00:00+08:00', status: 'pending' },
+    { id: 'a1b', badge_key: 'alishan', earned_on: '2026-05-03', strava_activity_id: '11', activity_name: '再騎阿里山', started_at: '2026-05-03T05:00:00+08:00', status: 'pending' },
+    { id: 'a2', badge_key: 'alishan', earned_on: '2026-03-29', strava_activity_id: '9', activity_name: '阿里山', started_at: '2026-03-29T05:00:00+08:00', status: 'pending' },
+    { id: 'w1', badge_key: 'wuling', earned_on: '2026-05-03', strava_activity_id: '12', activity_name: '武嶺西進', started_at: '2026-05-03T05:10:00+08:00', status: 'pending' },
+    { id: 's4', badge_key: 'west_wuling', tier: 'sub4', earned_on: '2026-05-03', strava_activity_id: '12', activity_name: '武嶺西進', started_at: '2026-05-03T05:10:00+08:00', elapsed_sec: 13000, status: 'pending' },
+    { id: 'fin', badge_key: 'west_wuling', tier: 'finisher', earned_on: '2026-03-01', strava_activity_id: '3', activity_name: '慢騎', started_at: '2026-03-01T05:00:00+08:00', status: 'pending' }
+  ]
+  const grouped = C.groupBadgePrompts(rows)
+  assert.equal(grouped.count, 3)
+  assert.equal(grouped.groups[0].activityId, '12')
+  assert.deepEqual(grouped.groups[0].badges.map(b => b.key + (b.tier ? ':' + b.tier : '')), ['wuling', 'west_wuling:sub4'])
+  assert.equal(grouped.groups[1].activityId, '9')
+  assert.equal(grouped.groups[1].badges[0].key, 'alishan')
+  assert.equal(grouped.groups.some(g => g.activityId === '11'), false)
+  assert.equal(grouped.groups.some(g => g.activityId === '3'), false)
+})
+
 test('strava cache drops rows older than seven days', () => {
   const now = '2026-11-12T00:00:00Z'
   const rows = [

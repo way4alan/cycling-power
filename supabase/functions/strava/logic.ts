@@ -78,7 +78,18 @@ export type Store = {
   removeActivity(lineUserId: string, externalId: string): Promise<void>
   forgetCache?(lineUserId: string): Promise<void>
   purgeCache?(): Promise<void>
-  saveOffers?(lineUserId: string, offers: { key: string; tier: string; earned_on: string; historical: boolean }[]): Promise<void>
+  saveOffers?(lineUserId: string, offers: {
+    key: string
+    tier: string
+    earned_on: string
+    historical: boolean
+    strava_activity_id?: string
+    activity_name?: string
+    started_at?: string
+    distance_km?: number
+    elevation_gain_m?: number
+    elapsed_sec?: number
+  }[]): Promise<void>
   saveCheckin?(lineUserId: string, ride: { id?: string; title?: string; date?: string }): Promise<void>
   openRides?(): Promise<RideWindow[]>
   scanUsed?(lineUserId: string): Promise<boolean>
@@ -371,14 +382,25 @@ async function applyOne(
   return applied
 }
 
-async function rememberPace(lineUserId: string, activity: StravaActivity, store: Store, historical: boolean) {
+function offerFrom(activity: StravaActivity, row: { key: string; tier: string }, historical: boolean) {
   const view = viewFromStrava(activity)
-  const offers = detectActivity(view).map((row) => ({
+  return {
     key: row.key,
     tier: row.tier,
     earned_on: view.localDate || '',
     historical,
-  }))
+    strava_activity_id: String(activity.id || ''),
+    activity_name: activity.name || '',
+    started_at: activity.start_date || activity.start_date_local || '',
+    distance_km: view.distanceKm,
+    elevation_gain_m: view.elevationGainM,
+    elapsed_sec: view.elapsedSec,
+  }
+}
+
+async function rememberPace(lineUserId: string, activity: StravaActivity, store: Store, historical: boolean) {
+  const view = viewFromStrava(activity)
+  const offers = detectActivity(view).map((row) => offerFrom(activity, row, historical))
   if (offers.length && store.saveOffers && /^\d{4}-\d{2}-\d{2}$/.test(offers[0].earned_on)) {
     await store.saveOffers(lineUserId, offers)
   }
@@ -517,12 +539,7 @@ async function handleStravaAuthBody(
         const view = viewFromStrava(activity)
         const found = detectActivity(view).filter((row) => row.key !== 'team')
         if (found.length && /^\d{4}-\d{2}-\d{2}$/.test(view.localDate || '')) {
-          await store.saveOffers(lineUserId, found.map((row) => ({
-            key: row.key,
-            tier: row.tier,
-            earned_on: view.localDate || '',
-            historical: true,
-          })))
+          await store.saveOffers(lineUserId, found.map((row) => offerFrom(activity, row, true)))
           offers += found.length
         }
       }

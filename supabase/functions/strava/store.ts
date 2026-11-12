@@ -62,14 +62,19 @@ export function serviceStore(supabaseUrl: string, serviceKey: string, fetchImpl:
     },
     async saveOffers(lineUserId, offers) {
       if (!offers.length) return
-      await rest('badge_prompts', {
-        method: 'POST',
-        body: JSON.stringify(offers.map((row) => ({
-          line_user_id: lineUserId,
+      await rpc('offer_badge_prompts', {
+        target: lineUserId,
+        offers: offers.map((row) => ({
           badge_key: row.key,
           tier: row.tier || '',
           earned_on: row.earned_on,
-        }))),
+          strava_activity_id: row.strava_activity_id || '',
+          activity_name: row.activity_name || '',
+          started_at: row.started_at || '',
+          distance_km: row.distance_km ?? '',
+          elevation_gain_m: row.elevation_gain_m ?? '',
+          elapsed_sec: row.elapsed_sec ?? '',
+        })),
       })
     },
     async saveCheckin(lineUserId, ride) {

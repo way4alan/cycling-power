@@ -2122,10 +2122,10 @@ async function loadPaceRecords() {
     })
     Object.keys(grouped).forEach(id => rememberBadges(id, '', grouped[id]))
   }
-  const prompts = await db.from('badge_prompts').select('id,badge_key,tier,earned_on,status').eq('status', 'pending')
+  const prompts = await db.from('badge_prompts').select('id,badge_key,tier,earned_on,status,strava_activity_id,activity_name,started_at,distance_km,elevation_gain_m,elapsed_sec').eq('status', 'pending')
   const checkins = await db.from('ride_checkin_prompts').select('id,ride_id,ride_title,ride_date,status').eq('status', 'pending')
   const ftps = await db.from('ftp_prompts').select('id,proposed_ftp,status').eq('status', 'pending')
-  if (!prompts.error) pacePrompts.badges = (prompts.data || []).map(row => Object.assign({ historical: true }, row))
+  if (!prompts.error) pacePrompts.badges = (prompts.data || []).map(row => Object.assign({ key: row.badge_key, historical: true }, row))
   if (!checkins.error) pacePrompts.checkin = (checkins.data || [])[0] || null
   if (!ftps.error) pacePrompts.ftp = (ftps.data || [])[0] || null
   const garage = await db.from('garage_public').select('rider_id,name,brand,odometer_km')
@@ -2707,8 +2707,14 @@ function seedDemoBadges() {
   ])
   const open = params.get('open')
   pacePrompts = {
-    scanOffer: open === 'scan',
-    badges: open === 'scan' ? [{ id: 'scan-1', key: 'shanlinxi', tier: '', earned_on: '2026-05-02', historical: true, status: 'pending' }] : [],
+    scanOffer: false,
+    badges: open === 'scan' ? [
+      { id: 'p-w', badge_key: 'wuling', key: 'wuling', tier: '', earned_on: '2026-05-03', strava_activity_id: '9001001', activity_name: '武嶺西進', started_at: '2026-05-02T21:10:00Z', distance_km: 54.2, elevation_gain_m: 2680, elapsed_sec: 3 * 3600 + 12 * 60, status: 'pending' },
+      { id: 'p-s', badge_key: 'west_wuling', key: 'west_wuling', tier: 'sub3', earned_on: '2026-05-03', strava_activity_id: '9001001', activity_name: '武嶺西進', started_at: '2026-05-02T21:10:00Z', distance_km: 54.2, elevation_gain_m: 2680, elapsed_sec: 3 * 3600 + 12 * 60, status: 'pending' },
+      { id: 'p-slow', badge_key: 'west_wuling', key: 'west_wuling', tier: 'finisher', earned_on: '2026-03-29', strava_activity_id: '9001002', activity_name: '慢騎武嶺', started_at: '2026-03-28T21:00:00Z', distance_km: 55, elevation_gain_m: 2500, elapsed_sec: 5 * 3600, status: 'pending' },
+      { id: 'p-a', badge_key: 'alishan', key: 'alishan', tier: '', earned_on: '2026-03-29', strava_activity_id: '9001003', activity_name: '阿里山神木', started_at: '2026-03-28T21:40:00Z', distance_km: 52.4, elevation_gain_m: 2140, elapsed_sec: 4 * 3600 + 20 * 60, status: 'pending' },
+      { id: 'p-a2', badge_key: 'alishan', key: 'alishan', tier: '', earned_on: '2026-05-03', strava_activity_id: '9001004', activity_name: '再騎阿里山', started_at: '2026-05-02T22:00:00Z', distance_km: 51, elevation_gain_m: 2000, elapsed_sec: 4 * 3600, status: 'pending' }
+    ] : [],
     checkin: open === 'checkin' ? { id: 'check-1', ride_id: 'ride-old', ride_title: '旗津海岸往返', ride_date: shiftDate(taipeiToday(), -7), external_id: '9001', device_name: 'Garmin Edge 840', status: 'pending' } : null,
     ftp: open === 'ftp' ? { id: 'ftp-1', proposed_ftp: 318, status: 'pending' } : null
   }
@@ -2733,16 +2739,54 @@ function renderSummitWall() {
     <p class="field-help">車隊年度徽章只會發給挑戰當天一起騎、而且本人確認的人。圖案之後再做，這裡先不畫年份徽章。</p>
   </section>`
 }
+function formatElapsed(sec) {
+  const n = Math.round(Number(sec))
+  if (!(n > 0)) return ''
+  const h = Math.floor(n / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  const s = n % 60
+  return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+}
+function formatTaipei(iso, fallback) {
+  if (!iso) return fallback || ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return fallback || ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date)
+  const get = (type) => (parts.find(p => p.type === type) || {}).value || ''
+  return get('year') + '/' + get('month') + '/' + get('day') + ' ' + get('hour') + ':' + get('minute')
+}
 function renderPacePrompts() {
   const host = document.getElementById('pace-prompts')
-  if (!host) return
+  if (!host || !globalThis.PaceChallenges) return
   const cards = []
   if (pacePrompts.scanOffer) {
     cards.push(`<section class="prompt-card"><h3>要掃描既有騎乘嗎？</h3><p>只會在後台看一次，找出可能的個人完攀。每一項都要你確認才發徽章，不會發車隊年度徽章，也不會留下原始軌跡。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="scan-yes">掃描一次</button><button class="cancel-btn" type="button" data-act="scan-no">先不要</button></div></section>`)
   }
-  pacePrompts.badges.filter(row => row.status === 'pending').forEach(row => {
-    const spec = PaceChallenges.BADGES[row.key] || { name: row.key }
-    cards.push(`<section class="prompt-card"><h3>可能完成${esc(spec.name)}</h3><p>${esc(row.earned_on)} ${esc(tierLabel(row.tier))}</p><p class="field-help">這是個人完攀。確認後才會出現在名字後面。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="badge-yes" data-id="${esc(row.id)}">確認，發給我</button><button class="cancel-btn" type="button" data-act="badge-no" data-id="${esc(row.id)}">不是這次</button></div></section>`)
+  const grouped = PaceChallenges.groupBadgePrompts(pacePrompts.badges || [])
+  if (grouped.count) {
+    cards.push(`<h2 class="section-title prompt-count">${grouped.groups.length} 場騎乘，${grouped.count} 個徽章待確認</h2>`)
+  }
+  grouped.groups.forEach(group => {
+    const when = formatTaipei(group.startedAt, group.earnedOn)
+    const bits = []
+    if (group.distanceKm != null && group.distanceKm !== '') bits.push(Number(group.distanceKm).toFixed(1) + ' km')
+    if (group.elevationGainM != null && group.elevationGainM !== '') bits.push('爬升 ' + Math.round(Number(group.elevationGainM)) + ' m')
+    if (formatElapsed(group.elapsedSec)) bits.push('經過 ' + formatElapsed(group.elapsedSec))
+    const badges = group.badges.map(b => {
+      const spec = PaceChallenges.BADGES[b.key] || { name: b.key }
+      const tier = tierLabel(b.tier)
+      const west = b.key === 'west_wuling' && formatElapsed(group.elapsedSec)
+        ? `<span class="prompt-west">埔里到武嶺 ${esc(formatElapsed(group.elapsedSec))}</span>` : ''
+      return `<div class="prompt-badge">${PaceBadgeArt.card(b.key, b.tier)}<div><b>${esc(spec.name)}${tier ? ' · ' + esc(tier) : ''}</b>${west}<div class="prompt-actions"><button class="save-btn" type="button" data-act="badge-yes" data-id="${esc(b.id)}">確認，發給我</button><button class="cancel-btn" type="button" data-act="badge-no" data-id="${esc(b.id)}">不是這次</button></div></div></div>`
+    }).join('')
+    const all = group.badges.length > 1
+      ? `<button class="save-btn" type="button" data-act="badge-yes-all" data-ids="${esc(group.badges.map(b => b.id).join(','))}">這場都確認</button>` : ''
+    const link = group.activityId
+      ? `<a class="strava-view" href="https://www.strava.com/activities/${esc(group.activityId)}" target="_blank" rel="noopener noreferrer">View on Strava</a>` : ''
+    cards.push(`<section class="prompt-card"><h3>${esc(group.name || '可能完成')}</h3><p>${esc(when)}</p>${bits.length ? `<p class="prompt-meta">${esc(bits.join(' · '))}</p>` : ''}<p>${link}</p>${badges}${all}</section>`)
   })
   if (pacePrompts.ftp && pacePrompts.ftp.status === 'pending') {
     cards.push(`<section class="prompt-card"><h3>FTP 要更新嗎？</h3><p>Strava 讀到 ${esc(pacePrompts.ftp.proposed_ftp)} W。PACE 不會直接覆蓋，確認後才更新你自己的 FTP。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="ftp-yes" data-id="${esc(pacePrompts.ftp.id)}">更新 FTP</button><button class="cancel-btn" type="button" data-act="ftp-no" data-id="${esc(pacePrompts.ftp.id)}">維持現在的</button></div></section>`)
@@ -2809,6 +2853,7 @@ function showBadgeInfo(key, tier) {
 function acceptBadgePrompt(id) {
   const row = pacePrompts.badges.find(item => item.id === id)
   if (!row || !myProfile) return
+  row.key = row.badge_key || row.key
   const mine = currentRider() || { id: myData && myData.id, line_user_id: myProfile.line_user_id }
   const next = PaceChallenges.applyBadgeDecision(badgeListFor(mine), row, true)
   rememberBadges(mine.id, mine.line_user_id, next)
@@ -4009,6 +4054,7 @@ function onGlobalClick(e) {
   else if (act === 'badge-info') showBadgeInfo(el.dataset.key, el.dataset.tier)
   else if (act === 'badge-close') { const note = document.getElementById('badge-note'); if (note) note.hidden = true }
   else if (act === 'badge-yes') acceptBadgePrompt(el.dataset.id)
+  else if (act === 'badge-yes-all') String(el.dataset.ids || '').split(',').filter(Boolean).forEach(acceptBadgePrompt)
   else if (act === 'badge-no') declineBadgePrompt(el.dataset.id)
   else if (act === 'ftp-yes') acceptFtpPrompt()
   else if (act === 'ftp-no') declineFtpPrompt()
