@@ -54,13 +54,13 @@ test('west wuling tiers use elapsed time and a higher grade replaces a lower one
 })
 
 test('verified summits match and unverified finishes do not invent a geofence', () => {
-  assert.equal(P.xiaoxueshanLodge.verified, false)
-  assert.equal(P.yakouTunnel.verified, false)
-  assert.equal(P.pingshanSchool.verified, false)
+  assert.equal(P.xiaoxueshanLodge.verified, true)
+  assert.equal(P.yakouTunnel.verified, true)
+  assert.equal(P.pingshanSchool.verified, true)
   assert.equal(P.fenglinBridge.verified, false)
   assert.equal(P.haishanCamp.verified, false)
-  assert.equal(P.alishanGate.verified, false)
-  assert.equal(P.liulongtou.verified, false)
+  assert.equal(P.alishanPark.verified, true)
+  assert.equal(P.liulongtou.verified, true)
   const wuling = C.detect(ride({
     points: [at(P.wuling, 3205)],
     maxEle: 3210,
@@ -78,6 +78,21 @@ test('verified summits match and unverified finishes do not invent a geofence', 
     distanceKm: 360,
     elapsedSec: 20 * 3600
   })).some(b => b.key === 'north_south'), false)
+  assert.equal(C.detect(ride({
+    points: [at(P.alishanPark, 2100)],
+    maxEle: 2100,
+    elevationGainM: 1600
+  })).some(b => b.key === 'alishan'), true)
+  assert.equal(C.detect(ride({
+    points: [at(P.xiaoxueshanLodge, 2600)],
+    maxEle: 2600,
+    elevationGainM: 2000
+  })).some(b => b.key === 'dasyueshan'), true)
+  assert.equal(C.detect(ride({
+    points: [at(P.bali, 5), at(P.worldGames, 8)],
+    distanceKm: 360,
+    elapsedSec: 20 * 3600
+  })).some(b => b.key === 'north_south'), true)
   assert.equal(C.detect(ride({
     points: [at(P.fugui, 10), at(P.eluanbi, 8)],
     distanceKm: 520,
@@ -132,7 +147,9 @@ test('group ride check-in needs the same day, a close start, and the route', () 
 })
 
 test('round island stays off until all four gates are configured', () => {
-  assert.equal(P.roundNorth.verified, false)
+  assert.equal(P.roundNorth.verified, true)
+  assert.equal(P.roundWest.verified, true)
+  assert.equal(P.roundEast.verified, true)
   assert.equal(P.shouka.verified, true)
   const gates = {
     north: { lat: 25.1, lng: 121.5, radiusM: 30000 },
@@ -152,6 +169,12 @@ test('round island stays off until all four gates are configured', () => {
     ]
   }]
   assert.equal(C.roundIsland(parts), null)
+  assert.equal(C.roundIsland([{
+    sport: 'Ride',
+    startedAt: '2026-11-01T00:00:00Z',
+    distanceKm: 960,
+    points: [at(P.roundNorth, 10), at(P.roundWest, 20), at(P.shouka, 460), at(P.roundEast, 15)]
+  }]).key, 'round_island')
   assert.equal(C.roundIsland(parts, gates).key, 'round_island')
   parts[0].startedAt = '2026-10-01T00:00:00Z'
   parts.push({ sport: 'Ride', startedAt: '2026-11-01T00:00:00Z', distanceKm: 10, points: parts[0].points })

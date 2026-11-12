@@ -23,19 +23,26 @@ export const PLACES: Record<string, Place> = {
   wuling: { lat: 24.136889, lng: 121.277111, radiusM: 300 },
   puliMonument: { lat: 23.973837, lng: 120.97969, radiusM: 500 },
   alishanShouzhen: { lat: 23.517635, lng: 120.810678, radiusM: 400 },
+  alishanPark: { lat: 23.508423, lng: 120.801112, radiusM: 400 },
   tataka: { lat: 23.487556, lng: 120.891722, radiusM: 400 },
   taiping: { lat: 24.497724, lng: 121.5350318, radiusM: 500 },
+  jianqing: { lat: 24.502297, lng: 121.525294, radiusM: 500 },
   shanlinxi: { lat: 23.636667, lng: 120.796417, radiusM: 400 },
+  liulongtou: { lat: 23.6551935, lng: 120.7879628, radiusM: 400 },
   bali: { lat: 25.143745, lng: 121.396088, radiusM: 500 },
-  pingshanSchool: { lat: null, lng: null, radiusM: 500 },
+  pingshanSchool: { lat: 22.694429, lng: 120.301663, radiusM: 500 },
+  worldGames: { lat: 22.702854, lng: 120.293633, radiusM: 600 },
   fugui: { lat: 25.298, lng: 121.537, radiusM: 800 },
+  fenglinBridge: { lat: null, lng: null, radiusM: 400 },
   eluanbi: { lat: 21.9022, lng: 120.8528, radiusM: 1000 },
-  xiaoxueshanLodge: { lat: null, lng: null, radiusM: 400 },
-  yakouTunnel: { lat: null, lng: null, radiusM: 400 },
-  roundNorth: { lat: null, lng: null, radiusM: 25000 },
-  roundWest: { lat: null, lng: null, radiusM: 25000 },
-  roundSouth: { lat: null, lng: null, radiusM: 25000 },
-  roundEast: { lat: null, lng: null, radiusM: 25000 },
+  haishanCamp: { lat: null, lng: null, radiusM: 500 },
+  shouka: { lat: 22.245239, lng: 120.835549, radiusM: 800 },
+  xiaoxueshanLodge: { lat: 24.282771, lng: 121.027483, radiusM: 400 },
+  yakouTunnel: { lat: 23.2655622, lng: 120.9552683, radiusM: 400 },
+  yakouEast: { lat: 23.2640577, lng: 120.9608922, radiusM: 400 },
+  roundNorth: { lat: 25.298, lng: 121.537, radiusM: 5000 },
+  roundWest: { lat: 24.079676, lng: 120.554091, radiusM: 6000 },
+  roundEast: { lat: 23.993951, lng: 121.60093, radiusM: 5000 },
 }
 
 function toRad(n: number) { return n * Math.PI / 180 }
@@ -57,6 +64,12 @@ function climb(activity: ActivityView, place: Place, minEle: number, minGain: nu
   if (!visited(activity.points, place)) return false
   return activity.maxEle >= minEle && activity.elevationGainM >= minGain
 }
+function climbAny(activity: ActivityView, places: Place[], minEle: number, minGain: number) {
+  return places.some((place) => climb(activity, place, minEle, minGain))
+}
+function visitedAny(points: Point[], places: Place[]) {
+  return places.some((place) => visited(points, place))
+}
 export function westTier(elapsedSec: number) {
   if (!(elapsedSec >= 0)) return null
   if (elapsedSec < 2 * HOUR) return 'sub2'
@@ -69,20 +82,20 @@ export function detectActivity(activity: ActivityView) {
   if (!activity || blocked(activity.sport)) return out
   const points = activity.points || []
   if (climb(activity, PLACES.wuling, 3200, 1500)) out.push({ key: 'wuling', tier: '' })
-  if (climb(activity, PLACES.alishanShouzhen, 2050, 1500)) out.push({ key: 'alishan', tier: '' })
+  if (climbAny(activity, [PLACES.alishanShouzhen, PLACES.alishanPark], 2050, 1500)) out.push({ key: 'alishan', tier: '' })
   if (climb(activity, PLACES.tataka, 2500, 1800)) out.push({ key: 'tatajia', tier: '' })
-  if (PLACES.xiaoxueshanLodge.lat != null && climb(activity, PLACES.xiaoxueshanLodge, 2500, 1400)) out.push({ key: 'dasyueshan', tier: '' })
-  if (PLACES.yakouTunnel.lat != null && climb(activity, PLACES.yakouTunnel, 2650, 1500)) out.push({ key: 'yakou', tier: '' })
-  if (climb(activity, PLACES.taiping, 1850, 1400)) out.push({ key: 'taipingshan', tier: '' })
-  if (climb(activity, PLACES.shanlinxi, 1550, 1200)) out.push({ key: 'shanlinxi', tier: '' })
-  if (PLACES.pingshanSchool.lat != null && visited(points, PLACES.bali) && visited(points, PLACES.pingshanSchool) && activity.distanceKm >= 340 && activity.elapsedSec <= 24 * HOUR) {
+  if (climb(activity, PLACES.xiaoxueshanLodge, 2500, 1400)) out.push({ key: 'dasyueshan', tier: '' })
+  if (climbAny(activity, [PLACES.yakouTunnel, PLACES.yakouEast], 2650, 1500)) out.push({ key: 'yakou', tier: '' })
+  if (climbAny(activity, [PLACES.taiping, PLACES.jianqing], 1850, 1400)) out.push({ key: 'taipingshan', tier: '' })
+  if (climbAny(activity, [PLACES.shanlinxi, PLACES.liulongtou], 1550, 1200)) out.push({ key: 'shanlinxi', tier: '' })
+  if (visited(points, PLACES.bali) && visitedAny(points, [PLACES.pingshanSchool, PLACES.worldGames]) && activity.distanceKm >= 340 && activity.elapsedSec <= 24 * HOUR) {
     out.push({ key: 'north_south', tier: '' })
   }
-  if (visited(points, PLACES.fugui) && visited(points, PLACES.eluanbi) && activity.distanceKm >= 500 && activity.elapsedSec <= 32 * HOUR) {
+  if (visitedAny(points, [PLACES.fugui, PLACES.fenglinBridge]) && visitedAny(points, [PLACES.eluanbi, PLACES.haishanCamp]) && activity.distanceKm >= 500 && activity.elapsedSec <= 32 * HOUR) {
     out.push({ key: 'twin_towers', tier: '' })
   }
-  const gates = [PLACES.roundNorth, PLACES.roundWest, PLACES.roundSouth, PLACES.roundEast]
-  if (gates.every((g) => g.lat != null) && gates.every((g) => visited(points, g)) && activity.distanceKm >= 900) {
+  const southOk = visitedAny(points, [PLACES.eluanbi, PLACES.shouka])
+  if (visited(points, PLACES.roundNorth) && visited(points, PLACES.roundWest) && southOk && visited(points, PLACES.roundEast) && activity.distanceKm >= 900) {
     out.push({ key: 'round_island', tier: '' })
   }
   if (visited(points, PLACES.puliMonument) && visited(points, PLACES.wuling) && activity.maxEle >= 3200 && activity.elevationGainM >= 1500) {
