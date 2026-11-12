@@ -841,6 +841,14 @@ input[type=range]::-moz-range-thumb {
 .badge-icon { display: block; }
 .member-page { padding: 8px 0 24px; }
 .prompt-card { margin: 0 0 12px; padding: 14px; border-radius: 16px; border: 1px solid rgba(230,43,138,.4); background: rgba(230,43,138,.08); }
+.prompt-count { margin: 4px 0 10px; }
+.prompt-meta { color: var(--text-dim); font-size: 13px; }
+.prompt-badge { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+.prompt-badge .badge-card { width: 84px; flex: none; }
+.prompt-badge .prompt-actions .save-btn,
+.prompt-badge .prompt-actions .cancel-btn { font-size: 13px; padding: 8px 6px; white-space: nowrap; }
+.prompt-badge b { display: block; margin-bottom: 4px; }
+.prompt-west { display: block; color: var(--text-dim); font-size: 12px; margin-bottom: 6px; }
 .prompt-actions { display: flex; gap: 8px; margin-top: 10px; }
 .prompt-actions .save-btn, .prompt-actions .cancel-btn { flex: 1; }
 .share-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-size: 14px; }

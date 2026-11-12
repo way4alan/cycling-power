@@ -88,6 +88,25 @@ async function main() {
   check('anon cannot run the purge', purgePriv === 'f' || purgePriv === 'false', purgePriv)
   check('anon cannot confirm a badge', confirmPriv === 'f' || confirmPriv === 'false', confirmPriv)
 
+  const offers = JSON.stringify([
+    { badge_key: 'alishan', tier: '', earned_on: '2026-05-03', strava_activity_id: '11', activity_name: '再騎阿里山', started_at: '2026-05-02T21:00:00Z', distance_km: 51, elevation_gain_m: 2000, elapsed_sec: 14000 },
+    { badge_key: 'alishan', tier: '', earned_on: '2026-05-03', strava_activity_id: '11', activity_name: '再騎阿里山', started_at: '2026-05-02T21:00:00Z', distance_km: 51, elevation_gain_m: 2000, elapsed_sec: 14000 },
+    { badge_key: 'west_wuling', tier: 'finisher', earned_on: '2026-03-01', strava_activity_id: '3', activity_name: '慢騎', started_at: '2026-02-28T21:00:00Z', distance_km: 55, elevation_gain_m: 2500, elapsed_sec: 18000 }
+  ]).replace(/'/g, "''")
+  await sql(`select public.offer_badge_prompts('${ME}', '${offers}'::jsonb)`)
+  check('offering the same ride twice keeps one pending badge',
+    (await sql(`select count(*) from public.badge_prompts where line_user_id = '${ME}' and badge_key = 'alishan' and status = 'pending'`)) === '1')
+  await sql(`select public.offer_badge_prompts('${ME}', '[{"badge_key":"alishan","tier":"","earned_on":"2026-03-29","strava_activity_id":"9","activity_name":"阿里山","started_at":"2026-03-28T21:00:00Z","distance_km":52,"elevation_gain_m":2100,"elapsed_sec":15000}]'::jsonb)`)
+  check('an earlier ride replaces the later prompt for the same badge',
+    (await sql(`select earned_on::text from public.badge_prompts where line_user_id = '${ME}' and badge_key = 'alishan' and status = 'pending'`)) === '2026-03-29')
+  await sql(`select public.offer_badge_prompts('${ME}', '[{"badge_key":"west_wuling","tier":"sub2","earned_on":"2026-05-03","strava_activity_id":"12","activity_name":"武嶺西進","started_at":"2026-05-02T21:10:00Z","distance_km":54,"elevation_gain_m":2800,"elapsed_sec":11000}]'::jsonb)`)
+  check('a better west wuling tier replaces the slower prompt',
+    (await sql(`select tier from public.badge_prompts where line_user_id = '${ME}' and badge_key = 'west_wuling' and status = 'pending'`)) === 'sub2')
+  check('the confirmed pace badge is still there',
+    (await sql(`select count(*) from public.member_badges where line_user_id = '${ME}' and badge_key = 'west_wuling'`)) === '1')
+  const offerPriv = await sql(`select has_function_privilege('anon', 'public.offer_badge_prompts(text, jsonb)', 'execute')`)
+  check('anon cannot offer badge prompts', offerPriv === 'f' || offerPriv === 'false', offerPriv)
+
   if (failed) process.exit(1)
 }
 
