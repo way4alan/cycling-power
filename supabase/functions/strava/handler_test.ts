@@ -14,6 +14,7 @@ import {
   type StravaActivity,
   type StravaToken,
 } from './logic.ts'
+import { detectActivity, westTier } from './summit.ts'
 
 const SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long'
 const STRAVA_SECRET = 'strava-client-secret-not-real'
@@ -388,6 +389,98 @@ Deno.test('webhook imports a ride once, asks before an indoor ride, and ignores 
     store,
   )
   assertEquals(await store.getToken({ athlete_id: 4242 }), null)
+})
+
+Deno.test('history scan offers a personal badge once and disconnect clears the cache', async () => {
+  assertEquals(westTier(2 * 3600), 'sub3')
+  assertEquals(westTier(4 * 3600), 'finisher')
+  const timed = detectActivity({
+    sport: 'Ride',
+    points: [{ lat: 24.136889, lng: 121.277111 }, { lat: 23.973837, lng: 120.97969 }],
+    distanceKm: 55,
+    elevationGainM: 2800,
+    maxEle: 3275,
+    elapsedSec: 2 * 3600 - 1,
+  })
+  assertEquals(timed.find((row) => row.key === 'west_wuling')?.tier, 'sub2')
+  assertEquals(detectActivity({
+    sport: 'VirtualRide',
+    points: [{ lat: 24.136889, lng: 121.277111 }, { lat: 23.973837, lng: 120.97969 }],
+    distanceKm: 55,
+    elevationGainM: 2800,
+    maxEle: 3275,
+    elapsedSec: 3600,
+  }).length, 0)
+  const store = memoryStore() as ReturnType<typeof memoryStore> & {
+    offers: { key: string }[]
+    forgotten: string[]
+    used: boolean
+  }
+  store.offers = []
+  store.forgotten = []
+  store.used = false
+  store.scanUsed = async () => store.used === true
+  store.markScanned = async () => { store.used = true }
+  store.saveOffers = async (_line, rows) => { store.offers.push(...rows) }
+  store.forgetCache = async (line) => { store.forgotten.push(line) }
+  await store.putToken({
+    line_user_id: USER,
+    athlete_id: 4242,
+    access_token: 'access-1',
+    refresh_token: 'refresh-1',
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    scope: STRAVA_SCOPE,
+    last_sync_at: null,
+  })
+  const user = await devSignUser(USER, SECRET)
+  const scan = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'history_scan' }),
+    }),
+    env(),
+    jsonFetch({
+      list: [{
+        id: 7,
+        sport_type: 'Ride',
+        distance: 55000,
+        total_elevation_gain: 2800,
+        elev_high: 3275,
+        elapsed_time: 7000,
+        start_date_local: '2026-08-02T05:10:00+08:00',
+        map: { summary_polyline: '' },
+      }],
+    }),
+    store,
+  )
+  assertEquals(scan.status, 200)
+  const body = await scan.json()
+  assertEquals(body.offers, 0)
+  const again = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'history_scan' }),
+    }),
+    env(),
+    jsonFetch({ list: [] }),
+    store,
+  )
+  assertEquals(again.status, 409)
+  const off = await handleStravaAuth(
+    new Request('https://example.test/strava-auth', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user}` },
+      body: JSON.stringify({ action: 'disconnect' }),
+    }),
+    env(),
+    jsonFetch({}),
+    store,
+  )
+  assertEquals(off.status, 200)
+  assertEquals(store.forgotten, [USER])
+  assertEquals(await store.getToken({ line_user_id: USER }), null)
 })
 
 Deno.test('sport filter and single-bike auto assign match the garage rules', () => {

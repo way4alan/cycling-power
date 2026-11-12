@@ -99,6 +99,10 @@ let gearPartId = ''
 let gearAdvanced = false
 let stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
 let stravaReturn = null
+let badgeIndex = {}
+let memberLineId = ''
+let pacePrompts = { scanOffer: false, badges: [], checkin: null, ftp: null }
+let publicGarage = {}
 let rideState = { rides: [], regs: [], groups: [], atts: [], routes: [], templates: [], templateGroups: [] }
 let rankingCtx = { rides: [], attendances: [], error: null }
 let publishLock = false
@@ -316,7 +320,46 @@ function nameHtml(rider) {
     style = 'color:' + hex
     if (count >= 20) style += ';text-shadow:0 0 8px ' + hex
   }
-  return '<span class="' + cls + '" style="' + style + '">' + esc(rider.name) + '</span>'
+  return '<button type="button" class="name-link" data-act="member" data-id="' + esc(rider.id || rider.line_user_id || '') + '"><span class="' + cls + '" style="' + style + '">' + esc(rider.name) + '</span>' + badgeIconsHtml(rider) + '</button>'
+}
+function badgeListFor(rider) {
+  if (!rider) return []
+  return badgeIndex[rider.id] || badgeIndex[rider.line_user_id] || []
+}
+function badgeIconsHtml(rider) {
+  const list = badgeListFor(rider).slice(0, 4)
+  if (!list.length || !globalThis.PaceBadgeArt) return ''
+  return list.map(b => {
+    const spec = (globalThis.PaceChallenges && PaceChallenges.BADGES[b.key]) || { name: b.key }
+    const tier = tierLabel(b.tier)
+    return `<span class="name-badge" data-act="badge-info" data-key="${esc(b.key)}" data-tier="${esc(b.tier || '')}" title="${esc(spec.name + (tier ? ' ' + tier : ''))}">${PaceBadgeArt.icon(b.key, b.tier)}</span>`
+  }).join('')
+}
+function tierLabel(tier) {
+  if (tier === 'sub2') return '白金 Sub2'
+  if (tier === 'sub3') return '金 Sub3'
+  if (tier === 'sub4') return '銀 Sub4'
+  if (tier === 'finisher') return '銅牌完成'
+  return ''
+}
+function badgeCopy(key) {
+  const copy = {
+    wuling: '個人完攀。路線進到武嶺牌樓，最高海拔至少 3,200 公尺，爬升至少 1,500 公尺。',
+    alishan: '個人完攀。進到阿里山受鎮宮一帶，最高海拔至少 2,050 公尺，爬升至少 1,500 公尺。',
+    tatajia: '個人完攀。進到塔塔加遊客中心，最高海拔至少 2,500 公尺，爬升至少 1,800 公尺。',
+    dasyueshan: '個人完攀。終點是和平區達觀里的天池，最高海拔至少 2,500 公尺，爬升至少 1,400 公尺。',
+    yakou: '個人完攀。進到大關山隧道西口或東口，最高海拔至少 2,650 公尺，爬升至少 1,500 公尺。',
+    taipingshan: '個人完攀。進到太平山遊樂區或見晴懷古步道，最高海拔至少 1,850 公尺，爬升至少 1,400 公尺。',
+    shanlinxi: '個人完攀。進到杉林溪園區或留龍頭，最高海拔至少 1,550 公尺，爬升至少 1,200 公尺。',
+    north_south: '一日北高。起點八里，終點屏山國小或高雄國家體育場，至少 340 公里、24 小時內。',
+    twin_towers: '一日雙塔。富貴角燈塔到鵝鑾鼻燈塔，至少 500 公里，經過時間 32 小時內。',
+    round_island: '環島。北到富貴角、西過八卦山、南到鵝鑾鼻或壽卡、東過花蓮車站，至少 900 公里。西與東閘門還請車隊確認。',
+    west_wuling: '從埔里地理中心碑到武嶺牌樓，用總經過時間分級。只會留下最高的一級。'
+  }
+  return copy[key] || ''
+}
+function memberAvatar(rider, size, bg) {
+  return `<button type="button" class="av-btn" data-act="member" data-id="${esc(rider.id || rider.line_user_id || '')}">${avatarHtml(rider.avatar_url, rider.name, size, bg)}</button>`
 }
 function titleBadge(count) {
   if (count >= 48) return 'PACE 傳奇'
@@ -1110,6 +1153,12 @@ function openRequestedPanel() {
     gearSheet = ''
     renderGear()
   }
+  if (open === 'summits' || open === 'scan' || open === 'ftp' || open === 'checkin' || open === 'member') {
+    switchTab('profile')
+    gearOpen = false
+    if (open === 'member') memberLineId = params.get('who') || memberLineId || 'r1'
+    renderProfile()
+  }
   if (open === 'gear' || open === 'garage' || open === 'add-bike' || open === 'add' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain' || open === 'mileage' || open === 'wax' || open === 'advanced' || open === 'strava-connected' || open === 'strava-pending') {
     switchTab('profile')
     gearOpen = true
@@ -1317,12 +1366,12 @@ function createDemoDb() {
   const now = new Date().toISOString()
   const gearDemo = buildDemoGear(day)
   const rider = (partial) => Object.assign({
-    status: 'approved', z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, mood: '', tire_width: null,
+    status: 'approved', z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, mood: '', bio: '', share_power: false, share_garage: false, history_scan_used: false, tire_width: null,
     name_color: '', is_admin: false, attendance_count: 0, avatar_url: '', last_seen: now, updated_at: now
   }, partial)
   const store = {
     riders: [
-      rider({ id: 'r1', line_user_id: 'u-lin', name: '小林', ftp: 330, weight: 72.05, attendance_count: 34, mood: '週末爬壽山' }),
+      rider({ id: 'r1', line_user_id: 'u-lin', name: '小林', ftp: 330, weight: 72.05, attendance_count: 34, mood: '週末爬壽山', bio: '武嶺西段可以問我。車庫跟 FTP 先不公開。' }),
       rider({ id: 'r2', line_user_id: 'demo-me', name: '阿揚', ftp: 305, weight: 67.93, attendance_count: 52, mood: '今天腿很酸', tire_width: 28, name_color: '#E62B8A', z1: 168, z2: 229, z3: 275, z4: 320, z5: 366, is_admin: DEMO_ADMIN }),
       rider({ id: 'r3', line_user_id: 'u-kevin', name: 'Kevin', ftp: 290, weight: 66.06, attendance_count: 22 }),
       rider({ id: 'r4', line_user_id: 'u-momo', name: 'Momo', ftp: 210, weight: 51.98, attendance_count: 8, mood: '補給吃好吃滿' }),
@@ -1570,6 +1619,7 @@ async function init() {
     if (DEMO) {
       db = createDemoDb()
       myProfile = { line_user_id: 'demo-me', name: '阿揚', avatar_url: '' }
+      seedDemoBadges()
     } else {
       await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0')
       await loadScript('https://static.line-scdn.net/liff/edge/2/sdk.js')
@@ -1611,6 +1661,7 @@ async function init() {
     await loadRideState()
     await loadRankingContext()
     await loadGear()
+    await loadPaceRecords()
     renderLeaderboard()
     renderNextRide()
     renderMatch()
@@ -1760,7 +1811,7 @@ function riderBlock(r, place) {
   const placeBg = place === 1 ? '#C026D3' : place === 2 ? '#E62B8A' : '#33C8E8'
   return `<div class="p-person" data-flip="${esc(r.id)}">
     ${place === 1 ? `<div class="crown">${icon('crown', 22)}</div>` : ''}
-    <div class="av-ring${legend}${champ}">${avatarHtml(r.avatar_url, r.name, place === 1 ? 84 : 64, r.avatar_url ? '' : placeBg)}</div>
+    <div class="av-ring${legend}${champ}">${memberAvatar(r, place === 1 ? 84 : 64, r.avatar_url ? '' : placeBg)}</div>
     <div class="p-name">${nameHtml(r)}${mine ? '<span class="me-tag">我</span>' : ''}</div>
     <div class="p-wkg"><span data-tween="${wkg(r).toFixed(2)}" data-digits="2" data-key="pod-${esc(r.id)}">0</span><small>W/kg</small></div>
     <div class="p-meta"><span>${esc(r.ftp)} W</span><span class="cat-badge ${ct.cls}">${ct.label}</span></div>
@@ -1813,7 +1864,7 @@ function renderLeaderboard() {
     return `<article class="rider-row${mine ? ' is-me' : ''}" data-flip="${esc(r.id)}">
       <div class="rider-top">
         <div class="rank">${rank}</div>
-        ${avatarHtml(r.avatar_url, r.name, 40)}
+        ${memberAvatar(r, 40)}
         <div class="rider-info">
           <div class="rider-name">${nameHtml(r)}${mine ? '<span class="me-tag">我</span>' : ''}<span class="cat-badge ${ct.cls}">${ct.label}</span>${title ? `<span class="title-pill">${esc(title)}</span>` : ''}</div>
           <div class="rider-mood">${r.mood ? '「' + esc(r.mood) + '」' : ''}${count > 0 ? `<span class="att-count">${count}次出席</span>` : ''}</div>
@@ -2060,10 +2111,38 @@ function demoStrava() {
     }] : []
   }
 }
+async function loadPaceRecords() {
+  if (DEMO || !db || !db.from) return
+  const badges = await db.from('member_badges_public').select('rider_id,badge_key,tier,earned_on')
+  if (!badges.error) {
+    const grouped = {}
+    ;(badges.data || []).forEach(row => {
+      if (!grouped[row.rider_id]) grouped[row.rider_id] = []
+      grouped[row.rider_id].push(row)
+    })
+    Object.keys(grouped).forEach(id => rememberBadges(id, '', grouped[id]))
+  }
+  const prompts = await db.from('badge_prompts').select('id,badge_key,tier,earned_on,status').eq('status', 'pending')
+  const checkins = await db.from('ride_checkin_prompts').select('id,ride_id,ride_title,ride_date,status').eq('status', 'pending')
+  const ftps = await db.from('ftp_prompts').select('id,proposed_ftp,status').eq('status', 'pending')
+  if (!prompts.error) pacePrompts.badges = (prompts.data || []).map(row => Object.assign({ historical: true }, row))
+  if (!checkins.error) pacePrompts.checkin = (checkins.data || [])[0] || null
+  if (!ftps.error) pacePrompts.ftp = (ftps.data || [])[0] || null
+  const garage = await db.from('garage_public').select('rider_id,name,brand,odometer_km')
+  publicGarage = {}
+  if (!garage.error) {
+    ;(garage.data || []).forEach(row => {
+      if (!publicGarage[row.rider_id]) publicGarage[row.rider_id] = []
+      publicGarage[row.rider_id].push(row)
+    })
+  }
+  const me = currentRider()
+  if (me && me.history_scan_used === false && stravaLink.connected) pacePrompts.scanOffer = true
+}
 async function loadStravaLink() {
   if (DEMO) { stravaLink = demoStrava(); return }
   const pending = await db.from('pending_activities').select('*').eq('status', 'pending')
-  stravaLink.pending = pending.error ? stravaLink.pending : (pending.data || [])
+  stravaLink.pending = pending.error ? stravaLink.pending : freshStravaRows(pending.data || [])
   try {
     const token = lineSession && lineSession.token
     if (!token) return
@@ -2095,9 +2174,10 @@ async function stravaAction(action, extra) {
   return { ok: res.ok, body }
 }
 function stravaSection(bikes) {
-  const pending = (stravaLink.pending || []).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
+  const pending = freshStravaRows(stravaLink.pending).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
   if (!stravaLink.connected) {
-    return `<button class="cancel-btn" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect">連結 Strava</button>`
+    return `<button class="strava-official" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect"><span>Connect with Strava</span></button>
+      <p class="field-help">只會讀取你自己的騎乘與 FTP，用來提醒保養、出席和徽章。確認後才會變成 PACE 的紀錄。可隨時中斷連結並刪除暫存。</p>`
   }
   const suggestions = PaceGear.suggestStravaBikes(bikes, stravaLink.gear)
   const maps = bikes.map(bike => {
@@ -2111,7 +2191,9 @@ function stravaSection(bikes) {
     const when = PaceGear.formatChainDate(row.occurred_on)
     return `<button class="gear-line" type="button" data-act="strava-ride" data-id="${esc(row.id)}">
       <span class="gear-line-copy"><span class="gear-line-top"><span class="gear-line-name">${esc(when)} · ${esc(String(row.distance_km))} km</span><span class="gear-line-meta">這次騎哪台？</span></span>
-      ${row.name ? `<span class="gear-line-sub">${esc(row.name)}</span>` : ''}${row.is_indoor ? '<span class="gear-line-sub">室內</span>' : ''}</span></button>`
+      ${row.name ? `<span class="gear-line-sub">${esc(row.name)}</span>` : ''}${row.is_indoor ? '<span class="gear-line-sub">室內</span>' : ''}
+      ${row.external_id ? `<a class="strava-view" href="https://www.strava.com/activities/${esc(String(row.external_id))}" target="_blank" rel="noopener noreferrer">View on Strava</a>` : ''}
+      ${/garmin/i.test(row.device_name || '') ? '<span class="garmin-note">Garmin</span>' : ''}</span></button>`
   }).join('')
   return `<section class="strava-card">
     <div class="wheel-head"><b>已連結 Strava</b>${pending.length ? `<span class="garage-due">${pending.length}</span>` : ''}</div>
@@ -2172,7 +2254,7 @@ function renderGear() {
   if (!host) return
   const ready = schemaCaps.gear && globalThis.PaceGear
   if (!ready || !gearOpen) {
-    if (home) home.hidden = false
+    if (home) home.hidden = !!memberLineId
     host.hidden = true
     const sheet = document.getElementById('gear-sheet')
     if (sheet) sheet.hidden = true
@@ -2357,18 +2439,20 @@ async function syncStrava() {
   renderGear()
 }
 async function disconnectStrava() {
+  const deleted = { kind: 'success', title: '已刪除 Strava 資料', body: '暫存的活動、待確認項目和連線都已刪除。已確認的出席與徽章仍是 PACE 的紀錄。' }
   if (DEMO) {
     stravaLink = { connected: false, gear: [], pending: [], demoReady: true }
-    showToast('已中斷連結')
-    renderGear()
+    pacePrompts = { scanOffer: false, badges: [], checkin: null, ftp: null }
+    showStravaResult(deleted)
     return
   }
   const result = await stravaAction('disconnect')
   if (!result || !result.ok) { showToast('沒有中斷'); return }
-  stravaLink = { connected: false, gear: [], pending: stravaLink.pending, demoReady: false }
-  showToast('已中斷連結')
-  await loadStravaLink()
-  renderGear()
+  await db.from('pending_activities').delete().eq('line_user_id', myProfile.line_user_id)
+  if (db.rpc) await db.rpc('forget_my_strava_cache')
+  stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
+  pacePrompts = { scanOffer: false, badges: [], checkin: null, ftp: null }
+  showStravaResult(deleted)
 }
 async function confirmStravaRide(id) {
   const ride = (stravaLink.pending || []).find(row => row.id === id)
@@ -2596,6 +2680,201 @@ async function resetGearPart(id) {
   renderGear()
   renderGearReminder()
 }
+function freshStravaRows(rows) {
+  if (!globalThis.PaceChallenges) return rows || []
+  return PaceChallenges.purgeStravaCache(rows || [], new Date().toISOString())
+}
+function rememberBadges(riderId, lineId, list) {
+  const best = globalThis.PaceChallenges ? PaceChallenges.keepBest(list) : list
+  const rows = (best || []).map(b => {
+    const full = (list || []).find(row => row.key === b.key && (row.tier || '') === (b.tier || '')) || b
+    return { key: b.key, tier: b.tier || '', earned_on: full.earned_on || '' }
+  })
+  if (riderId) badgeIndex[riderId] = rows
+  if (lineId) badgeIndex[lineId] = rows
+}
+function seedDemoBadges() {
+  rememberBadges('r2', 'demo-me', [
+    { key: 'wuling', tier: '', earned_on: '2026-08-02' },
+    { key: 'west_wuling', tier: 'sub3', earned_on: '2026-08-02' },
+    { key: 'alishan', tier: '', earned_on: '2026-06-14' },
+    { key: 'twin_towers', tier: '', earned_on: '2025-11-15' }
+  ])
+  rememberBadges('r1', 'u-lin', [
+    { key: 'wuling', tier: '', earned_on: '2026-03-01' },
+    { key: 'tatajia', tier: '', earned_on: '2026-04-12' },
+    { key: 'west_wuling', tier: 'sub2', earned_on: '2026-03-01' }
+  ])
+  const open = params.get('open')
+  pacePrompts = {
+    scanOffer: open === 'scan',
+    badges: open === 'scan' ? [{ id: 'scan-1', key: 'shanlinxi', tier: '', earned_on: '2026-05-02', historical: true, status: 'pending' }] : [],
+    checkin: open === 'checkin' ? { id: 'check-1', ride_id: 'ride-old', ride_title: '旗津海岸往返', ride_date: shiftDate(taipeiToday(), -7), external_id: '9001', device_name: 'Garmin Edge 840', status: 'pending' } : null,
+    ftp: open === 'ftp' ? { id: 'ftp-1', proposed_ftp: 318, status: 'pending' } : null
+  }
+  if (open === 'member') memberLineId = 'r1'
+}
+function renderSummitWall() {
+  const host = document.getElementById('summit-wall')
+  if (!host || !globalThis.PaceChallenges || !globalThis.PaceBadgeArt) return
+  const mine = currentRider()
+  const owned = badgeListFor(mine || { id: myData && myData.id, line_user_id: myProfile && myProfile.line_user_id })
+  const keys = Object.keys(PaceChallenges.BADGES)
+  host.innerHTML = `<section class="card">
+    <div class="badge-head"><h2 class="section-title">完攀徽章</h2><span>${owned.length} / ${keys.length}</span></div>
+    <div class="badge-wall-grid">${keys.map(key => {
+      const spec = PaceChallenges.BADGES[key]
+      const got = owned.find(b => b.key === key)
+      return `<button class="badge-tile${got ? '' : ' locked'}" type="button" data-act="badge-info" data-key="${esc(key)}" data-tier="${esc(got ? got.tier : '')}">
+        ${PaceBadgeArt.card(key, got ? got.tier : '')}
+        <span>${esc(spec.name)}${got && got.tier ? ' · ' + esc(tierLabel(got.tier)) : ''}</span>
+      </button>`
+    }).join('')}</div>
+    <p class="field-help">車隊年度徽章只會發給挑戰當天一起騎、而且本人確認的人。圖案之後再做，這裡先不畫年份徽章。</p>
+  </section>`
+}
+function renderPacePrompts() {
+  const host = document.getElementById('pace-prompts')
+  if (!host) return
+  const cards = []
+  if (pacePrompts.scanOffer) {
+    cards.push(`<section class="prompt-card"><h3>要掃描既有騎乘嗎？</h3><p>只會在後台看一次，找出可能的個人完攀。每一項都要你確認才發徽章，不會發車隊年度徽章，也不會留下原始軌跡。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="scan-yes">掃描一次</button><button class="cancel-btn" type="button" data-act="scan-no">先不要</button></div></section>`)
+  }
+  pacePrompts.badges.filter(row => row.status === 'pending').forEach(row => {
+    const spec = PaceChallenges.BADGES[row.key] || { name: row.key }
+    cards.push(`<section class="prompt-card"><h3>可能完成${esc(spec.name)}</h3><p>${esc(row.earned_on)} ${esc(tierLabel(row.tier))}</p><p class="field-help">這是個人完攀。確認後才會出現在名字後面。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="badge-yes" data-id="${esc(row.id)}">確認，發給我</button><button class="cancel-btn" type="button" data-act="badge-no" data-id="${esc(row.id)}">不是這次</button></div></section>`)
+  })
+  if (pacePrompts.ftp && pacePrompts.ftp.status === 'pending') {
+    cards.push(`<section class="prompt-card"><h3>FTP 要更新嗎？</h3><p>Strava 讀到 ${esc(pacePrompts.ftp.proposed_ftp)} W。PACE 不會直接覆蓋，確認後才更新你自己的 FTP。</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="ftp-yes" data-id="${esc(pacePrompts.ftp.id)}">更新 FTP</button><button class="cancel-btn" type="button" data-act="ftp-no" data-id="${esc(pacePrompts.ftp.id)}">維持現在的</button></div></section>`)
+  }
+  if (pacePrompts.checkin && pacePrompts.checkin.status === 'pending') {
+    const row = pacePrompts.checkin
+    cards.push(`<section class="prompt-card"><h3>這一場要記出席嗎？</h3><p>${esc(row.ride_title)} 的時間和路線，和你自己的一筆騎乘吻合。</p><p><a class="strava-view" href="https://www.strava.com/activities/${esc(String(row.external_id || ''))}" target="_blank" rel="noopener noreferrer">View on Strava</a>${/garmin/i.test(row.device_name || '') ? '<span class="garmin-note">Garmin</span>' : ''}</p><div class="prompt-actions"><button class="save-btn" type="button" data-act="checkin-yes" data-id="${esc(row.id)}">確認出席</button><button class="cancel-btn" type="button" data-act="checkin-no" data-id="${esc(row.id)}">這次不算</button></div></section>`)
+  }
+  host.innerHTML = cards.join('')
+}
+function renderMember() {
+  const page = document.getElementById('member-page')
+  const home = document.getElementById('profile-home')
+  if (!page) return
+  if (!memberLineId) {
+    page.hidden = true
+    page.innerHTML = ''
+    return
+  }
+  const rider = allRiders.find(r => r.id === memberLineId || r.line_user_id === memberLineId) || (myData && (myData.id === memberLineId || myData.line_user_id === memberLineId) ? myData : null)
+  if (!rider) { page.hidden = true; return }
+  if (home) home.hidden = true
+  const garage = document.getElementById('gear-garage')
+  if (garage) garage.hidden = true
+  page.hidden = false
+  const mine = isMe(rider)
+  const badges = badgeListFor(rider)
+  const rides = (rideState.atts || []).filter(a => (a.rider_id && a.rider_id === rider.id) || (a.line_user_id && a.line_user_id === rider.line_user_id))
+  const rideNames = []
+  rides.forEach(a => {
+    const ride = (rideState.rides || []).find(r => r.id === a.ride_id)
+    if (!ride || ride.cancelled || !ride.is_finished || rideNames.includes(ride.title)) return
+    rideNames.push(ride.title)
+  })
+  const showPower = mine || rider.share_power === true
+  const showGarage = mine || rider.share_garage === true
+  page.innerHTML = `<button class="text-back member-back" type="button" data-act="member-close">${icon('chevron-left', 16)}返回</button>
+    <div class="profile-id">${memberAvatar(rider, 72)}<div><div class="profile-name">${nameHtml(rider)}</div><div class="field-help">${esc(rider.bio || rider.mood || '這位車友還沒寫簡介')}</div></div></div>
+    <section class="member-section"><h2 class="section-title">完攀徽章</h2><div class="badge-wall-grid">${badges.length ? badges.map(b => `<button class="badge-tile" type="button" data-act="badge-info" data-key="${esc(b.key)}" data-tier="${esc(b.tier || '')}">${PaceBadgeArt.card(b.key, b.tier)}<span>${esc((PaceChallenges.BADGES[b.key] || {}).name || b.key)}${b.tier ? ' · ' + esc(tierLabel(b.tier)) : ''}</span></button>`).join('') : '<p class="field-help">還沒有完攀徽章</p>'}</div></section>
+    <section class="member-section"><h2 class="section-title">團騎參與</h2>${rideNames.length ? rideNames.map(title => `<div class="member-ride">${esc(title)}</div>`).join('') : '<p class="field-help">還沒有出席紀錄</p>'}</section>
+    <section class="member-section"><h2 class="section-title">功率</h2>${showPower && rider.ftp && rider.weight ? `<p>${esc(rider.ftp)} W · ${esc(wkgStr(rider))} W/kg</p>` : '<p class="field-help">這位車友沒有公開 FTP</p>'}</section>
+    <section class="member-section"><h2 class="section-title">車庫</h2>${showGarage ? (mine ? '<p class="field-help">這是你的車庫，可以從我的資料進去。</p>' : ((publicGarage[rider.id] || []).map(bike => `<div class="member-ride">${esc(bike.name)}${bike.brand ? ' · ' + esc(bike.brand) : ''} · ${esc(bike.odometer_km)} km</div>`).join('') || '<p class="field-help">已公開，還沒有車</p>')) : '<p class="field-help">車庫沒有公開</p>'}</section>`
+}
+function openMember(id) {
+  if (!id) return
+  memberLineId = id
+  gearOpen = false
+  switchTab('profile')
+  renderMember()
+}
+function closeMember() {
+  memberLineId = ''
+  const home = document.getElementById('profile-home')
+  if (home) home.hidden = false
+  renderMember()
+}
+function showBadgeInfo(key, tier) {
+  const spec = (globalThis.PaceChallenges && PaceChallenges.BADGES[key]) || { name: key }
+  const note = document.getElementById('badge-note')
+  document.getElementById('badge-note-title').textContent = spec.name + (tierLabel(tier) ? ' · ' + tierLabel(tier) : '')
+  document.getElementById('badge-note-body').textContent = badgeCopy(key)
+  note.hidden = false
+}
+function acceptBadgePrompt(id) {
+  const row = pacePrompts.badges.find(item => item.id === id)
+  if (!row || !myProfile) return
+  const mine = currentRider() || { id: myData && myData.id, line_user_id: myProfile.line_user_id }
+  const next = PaceChallenges.applyBadgeDecision(badgeListFor(mine), row, true)
+  rememberBadges(mine.id, mine.line_user_id, next)
+  row.status = 'confirmed'
+  if (!DEMO) db.rpc('confirm_my_badge', { prompt_id: id })
+  renderSummitWall()
+  renderPacePrompts()
+  renderLeaderboard()
+  showToast('已加上徽章')
+}
+function declineBadgePrompt(id) {
+  const row = pacePrompts.badges.find(item => item.id === id)
+  if (row) row.status = 'dismissed'
+  if (!DEMO) db.rpc('dismiss_my_prompt', { kind: 'badge', prompt_id: id })
+  renderPacePrompts()
+}
+function acceptFtpPrompt() {
+  const row = pacePrompts.ftp
+  if (!row) return
+  const mine = currentRider()
+  const next = PaceChallenges.applyFtpDecision(mine ? mine.ftp : 0, row.proposed_ftp, true)
+  if (mine) mine.ftp = next
+  row.status = 'confirmed'
+  const input = document.getElementById('inp-ftp')
+  if (input) input.value = next
+  if (!DEMO && myData) db.rpc('confirm_my_ftp', { prompt_id: row.id })
+  renderPacePrompts()
+  renderProfile()
+  showToast('已更新 FTP')
+}
+function declineFtpPrompt() {
+  if (pacePrompts.ftp) pacePrompts.ftp.status = 'dismissed'
+  if (!DEMO && pacePrompts.ftp) db.rpc('dismiss_my_prompt', { kind: 'ftp', prompt_id: pacePrompts.ftp.id })
+  renderPacePrompts()
+}
+function acceptCheckin() {
+  const row = pacePrompts.checkin
+  if (!row || !myProfile) return
+  const next = PaceChallenges.applyCheckinDecision(rideState.atts || [], {
+    ride_id: row.ride_id, line_user_id: myProfile.line_user_id, name: myProfile.name
+  }, true)
+  rideState.atts = next
+  row.status = 'confirmed'
+  if (!DEMO) db.rpc('confirm_my_checkin', { prompt_id: row.id })
+  renderPacePrompts()
+  showToast('已記出席')
+}
+function declineCheckin() {
+  if (pacePrompts.checkin) pacePrompts.checkin.status = 'dismissed'
+  if (!DEMO && pacePrompts.checkin) db.rpc('dismiss_my_prompt', { kind: 'checkin', prompt_id: pacePrompts.checkin.id })
+  renderPacePrompts()
+}
+async function startHistoryScan() {
+  pacePrompts.scanOffer = false
+  if (DEMO) {
+    if (!pacePrompts.badges.length) {
+      pacePrompts.badges = [{ id: 'scan-1', key: 'shanlinxi', tier: '', earned_on: '2026-05-02', historical: true, status: 'pending' }]
+    }
+    renderPacePrompts()
+    return
+  }
+  const result = await stravaAction('history_scan')
+  if (result && result.body && result.body.error === 'already_scanned') showToast('已經掃描過一次')
+  await loadPaceRecords()
+  renderPacePrompts()
+}
 function renderProfile() {
   if (!myProfile) return
   const me = currentRider()
@@ -2604,7 +2883,7 @@ function renderProfile() {
   const legend = count >= 48
   document.getElementById('profile-hero').innerHTML = `
     <div class="profile-id">
-      <div class="av-ring${legend ? ' is-legend' : ''}">${avatarHtml(myProfile.avatar_url, myProfile.name, 72)}</div>
+      <div class="av-ring${legend ? ' is-legend' : ''}">${memberAvatar(me || { id: myData && myData.id, line_user_id: myProfile.line_user_id, name: myProfile.name, avatar_url: myProfile.avatar_url }, 72)}</div>
       <div>
         <div class="profile-name">${nameHtml(me || { name: myProfile.name, attendance_count: count, name_color: me?.name_color })}</div>
         <div class="badge-row">
@@ -2668,7 +2947,16 @@ function renderProfile() {
     }
   }
   paintZones()
+  const bio = document.getElementById('inp-bio')
+  if (bio && me) bio.value = me.bio || ''
+  const sharePower = document.getElementById('share-power')
+  const shareGarage = document.getElementById('share-garage')
+  if (sharePower && me) sharePower.checked = me.share_power === true
+  if (shareGarage && me) shareGarage.checked = me.share_garage === true
   renderGear()
+  renderSummitWall()
+  renderPacePrompts()
+  if (memberLineId) renderMember()
 }
 function updateColorPreview() {
   const color = safeHex(document.getElementById('inp-name-color').value) || '#ffffff'
@@ -2706,6 +2994,9 @@ async function saveProfile() {
     ftp, weight,
     tire_width: parseInt(document.getElementById('inp-tire').value, 10) || null,
     mood: document.getElementById('inp-mood').value.trim(),
+    bio: (document.getElementById('inp-bio') && document.getElementById('inp-bio').value || '').trim(),
+    share_power: !!(document.getElementById('share-power') && document.getElementById('share-power').checked),
+    share_garage: !!(document.getElementById('share-garage') && document.getElementById('share-garage').checked),
     name_color: count >= 10 ? (safeHex(document.getElementById('inp-name-color').value) || '') : (me?.name_color || ''),
     z1: parseInt(document.getElementById('z1').value, 10) || 0,
     z2: parseInt(document.getElementById('z2').value, 10) || 0,
@@ -3713,6 +4004,18 @@ function onGlobalClick(e) {
   else if (act === 'gear-reset') resetGearPart(el.dataset.id)
   else if (act === 'gear-chain') replaceChain(el.dataset.id)
   else if (act === 'gear-interval') saveGearInterval(el.dataset.id)
+  else if (act === 'member') openMember(el.dataset.id)
+  else if (act === 'member-close') closeMember()
+  else if (act === 'badge-info') showBadgeInfo(el.dataset.key, el.dataset.tier)
+  else if (act === 'badge-close') { const note = document.getElementById('badge-note'); if (note) note.hidden = true }
+  else if (act === 'badge-yes') acceptBadgePrompt(el.dataset.id)
+  else if (act === 'badge-no') declineBadgePrompt(el.dataset.id)
+  else if (act === 'ftp-yes') acceptFtpPrompt()
+  else if (act === 'ftp-no') declineFtpPrompt()
+  else if (act === 'checkin-yes') acceptCheckin()
+  else if (act === 'checkin-no') declineCheckin()
+  else if (act === 'scan-yes') startHistoryScan()
+  else if (act === 'scan-no') { pacePrompts.scanOffer = false; renderPacePrompts() }
   else if (act === 'strava-connect') connectStrava()
   else if (act === 'strava-sync') syncStrava()
   else if (act === 'strava-disconnect') disconnectStrava()

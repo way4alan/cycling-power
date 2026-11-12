@@ -232,6 +232,7 @@
         <div id="tab-profile" class="tab-panel">
           <section id="strava-return" class="strava-return" hidden></section>
           <div id="profile-home">
+          <div id="pace-prompts"></div>
           <div id="profile-hero"></div>
           <button class="garage-entry" id="garage-entry" type="button" data-act="gear-open-screen" hidden>
             <span class="left"><span data-icon="bike" data-size="18"></span>我的車庫</span>
@@ -242,6 +243,7 @@
             <div id="attendance-progress"></div>
             <div id="zone-visual"></div>
           </div>
+          <div id="summit-wall"></div>
           <div id="badge-wall"></div>
           <div id="admin-entry"></div>
           <div class="card form-card" id="profile-form">
@@ -265,6 +267,9 @@
               </select>
             </div>
             <div class="form-row"><label for="inp-mood">心情小語（顯示在排行榜）</label><input type="text" id="inp-mood" placeholder="例如：今天腿很酸" maxlength="30"></div>
+            <div class="form-row"><label for="inp-bio">個人簡介</label><textarea id="inp-bio" maxlength="160" placeholder="例如：周末固定壽山，武嶺可以問我"></textarea></div>
+            <label class="share-row"><input type="checkbox" id="share-power"> 在個人主頁公開 FTP 與 W/kg</label>
+            <label class="share-row"><input type="checkbox" id="share-garage"> 在個人主頁公開車庫</label>
             <div id="color-picker-section" hidden>
               <div class="form-row">
                 <label for="inp-name-color">ID 文字顏色（出席 10 次解鎖）</label>
@@ -287,6 +292,7 @@
             <button class="save-btn" type="button" onclick="saveProfile()"><span data-icon="check" data-size="18"></span>儲存更新</button>
           </div>
           </div>
+          <section id="member-page" class="member-page" hidden></section>
           <section id="gear-garage" class="gear-garage" hidden></section>
         </div>
 
@@ -361,6 +367,13 @@
   <div class="gear-sheet-panel" id="gear-sheet-body" role="dialog" aria-modal="true"></div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="badge-note" class="badge-note" hidden>
+  <div class="badge-note-card" role="dialog" aria-modal="true">
+    <h3 id="badge-note-title"></h3>
+    <p id="badge-note-body"></p>
+    <button class="save-btn" type="button" data-act="badge-close">關閉</button>
+  </div>
+</div>
 <div id="confirm" class="confirm" hidden>
   <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
     <h3 id="confirm-title"></h3>
@@ -374,6 +387,8 @@
 <canvas id="confetti"></canvas>
 <script src="lib/pace-core.js"></script>
 <script src="lib/gear.js"></script>
+<script src="lib/challenges.js"></script>
+<script src="lib/badge-art.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 </body>

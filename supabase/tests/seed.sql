@@ -3,6 +3,11 @@ delete from private.strava_oauth_states;
 delete from private.strava_tokens;
 
 truncate table
+  public.team_badges,
+  public.ftp_prompts,
+  public.ride_checkin_prompts,
+  public.badge_prompts,
+  public.member_badges,
   public.chain_replacements,
   public.mileage_logs,
   public.pending_activities,

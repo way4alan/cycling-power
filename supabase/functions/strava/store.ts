@@ -1,5 +1,6 @@
 // 正式環境用 service role 呼叫 strava_backend。瀏覽器沒有這個 key。
 import type { Store, StravaToken } from './logic.ts'
+import type { RideWindow } from './summit.ts'
 
 export function serviceStore(supabaseUrl: string, serviceKey: string, fetchImpl: typeof fetch = fetch): Store {
   async function call(op: string, payload: Record<string, unknown>): Promise<Record<string, unknown> | null> {
@@ -53,5 +54,90 @@ export function serviceStore(supabaseUrl: string, serviceKey: string, fetchImpl:
     async removeActivity(lineUserId, externalId) {
       await call('remove_activity', { line_user_id: lineUserId, external_id: externalId })
     },
+    async forgetCache(lineUserId) {
+      await rpc('forget_member_strava', { target: lineUserId })
+    },
+    async purgeCache() {
+      await rpc('purge_expired_strava_cache', {})
+    },
+    async saveOffers(lineUserId, offers) {
+      if (!offers.length) return
+      await rest('badge_prompts', {
+        method: 'POST',
+        body: JSON.stringify(offers.map((row) => ({
+          line_user_id: lineUserId,
+          badge_key: row.key,
+          tier: row.tier || '',
+          earned_on: row.earned_on,
+        }))),
+      })
+    },
+    async saveCheckin(lineUserId, ride) {
+      await rest('ride_checkin_prompts', {
+        method: 'POST',
+        body: JSON.stringify({
+          line_user_id: lineUserId,
+          ride_id: ride.id || null,
+          ride_title: ride.title || '',
+          ride_date: ride.date || null,
+        }),
+      })
+    },
+    async openRides() {
+      const res = await fetchImpl(`${supabaseUrl}/rest/v1/rides?select=id,title,date,time,routes(track)&order=date.desc&limit=30`, {
+        headers: serviceHeaders(),
+      })
+      if (!res.ok) return []
+      const rows = await res.json() as { id?: string; title?: string; date?: string; time?: string; routes?: { track?: RideWindow['track'] } }[]
+      if (!Array.isArray(rows)) return []
+      return rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        date: row.date,
+        time: row.time,
+        track: row.routes?.track || [],
+      }))
+    },
+    async scanUsed(lineUserId) {
+      const res = await fetchImpl(`${supabaseUrl}/rest/v1/riders?line_user_id=eq.${encodeURIComponent(lineUserId)}&select=history_scan_used`, {
+        headers: serviceHeaders(),
+      })
+      if (!res.ok) return false
+      const rows = await res.json() as { history_scan_used?: boolean }[]
+      return rows[0]?.history_scan_used === true
+    },
+    async markScanned(lineUserId) {
+      await fetchImpl(`${supabaseUrl}/rest/v1/riders?line_user_id=eq.${encodeURIComponent(lineUserId)}`, {
+        method: 'PATCH',
+        headers: { ...serviceHeaders(), prefer: 'return=minimal' },
+        body: JSON.stringify({ history_scan_used: true }),
+      })
+    },
+    async noteDevice(lineUserId, externalId, deviceName) {
+      await fetchImpl(`${supabaseUrl}/rest/v1/pending_activities?line_user_id=eq.${encodeURIComponent(lineUserId)}&external_id=eq.${encodeURIComponent(externalId)}`, {
+        method: 'PATCH',
+        headers: { ...serviceHeaders(), prefer: 'return=minimal' },
+        body: JSON.stringify({ device_name: deviceName.slice(0, 80) }),
+      })
+    },
+  }
+  function serviceHeaders() {
+    return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, 'content-type': 'application/json' }
+  }
+  async function rpc(name: string, args: Record<string, unknown>) {
+    const res = await fetchImpl(`${supabaseUrl}/rest/v1/rpc/${name}`, {
+      method: 'POST',
+      headers: serviceHeaders(),
+      body: JSON.stringify(args),
+    })
+    if (!res.ok) throw new Error('strava_rpc')
+  }
+  async function rest(table: string, init: { method: string; body: string }) {
+    const res = await fetchImpl(`${supabaseUrl}/rest/v1/${table}`, {
+      method: init.method,
+      headers: { ...serviceHeaders(), prefer: 'return=minimal' },
+      body: init.body,
+    })
+    if (!res.ok) throw new Error('strava_rest')
   }
 }

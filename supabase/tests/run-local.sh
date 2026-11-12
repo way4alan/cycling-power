@@ -61,6 +61,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261110180000_strava_sync.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261111180000_strava_backend_qualify.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261111180000_strava_backend_qualify.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112120000_badges_compliance.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112120000_badges_compliance.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
@@ -87,7 +89,7 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:54321/"; then
 fi
 
 echo "== pace core =="
-node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs"
+node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs" "$ROOT/tests/challenges.test.mjs"
 
 echo "== deno unit =="
 deno test --allow-env "$ROOT/supabase/functions/line-auth/handler_test.ts" "$ROOT/supabase/functions/strava/handler_test.ts"
@@ -97,6 +99,9 @@ PACE_API=http://127.0.0.1:54321 node "$ROOT/supabase/tests/auth_rls.mjs"
 
 echo "== strava backend sql =="
 node "$ROOT/supabase/tests/strava_backend.mjs"
+
+echo "== badges =="
+node "$ROOT/supabase/tests/badges_rls.mjs"
 
 if [[ ! -d /tmp/pace-jsdom/node_modules/jsdom ]]; then
   mkdir -p /tmp/pace-jsdom

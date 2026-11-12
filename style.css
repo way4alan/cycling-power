@@ -826,6 +826,32 @@ input[type=range]::-moz-range-thumb {
 .strava-actions .cancel-btn { flex: 1; width: auto; }
 .strava-card select { width: 100%; }
 .strava-return { margin: 0 0 12px; }
+.strava-official {
+  width: 100%; height: 48px; border: 0; border-radius: 4px; background: #FC5200; color: #fff;
+  font-weight: 700; letter-spacing: .01em; display: inline-flex; align-items: center; justify-content: center;
+}
+.strava-view { color: #FC5200; font-weight: 700; text-decoration: underline; font-size: 13px; }
+.garmin-note { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--text-dim); }
+.name-link { border: 0; background: transparent; color: inherit; font: inherit; display: inline-flex; align-items: center; gap: 4px; padding: 0; text-align: left; }
+.name-badge { display: inline-flex; border: 0; background: transparent; padding: 0; }
+.badge-wall-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.badge-tile { background: transparent; border-radius: 14px; padding: 4px 2px; text-align: center; }
+.badge-tile span { display: block; font-size: 12px; margin-top: 4px; }
+.badge-card { width: 100%; height: auto; display: block; }
+.badge-icon { display: block; }
+.member-page { padding: 8px 0 24px; }
+.prompt-card { margin: 0 0 12px; padding: 14px; border-radius: 16px; border: 1px solid rgba(230,43,138,.4); background: rgba(230,43,138,.08); }
+.prompt-actions { display: flex; gap: 8px; margin-top: 10px; }
+.prompt-actions .save-btn, .prompt-actions .cancel-btn { flex: 1; }
+.share-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-size: 14px; }
+.av-btn { border: 0; background: transparent; padding: 0; color: inherit; }
+.badge-tile.locked .badge-card { filter: grayscale(1) brightness(.62); }
+.badge-note { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; z-index: 50; }
+.badge-note[hidden] { display: none; }
+.badge-note-card { width: min(480px, 100%); margin: 0 auto; background: #101828; color: #fff; border-radius: 18px 18px 0 0; padding: 18px 16px 24px; }
+.member-back { margin-bottom: 8px; }
+.member-section { margin-top: 16px; }
+.member-ride { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
 .strava-return-card {
   width: min(420px, 100%); text-align: center;
   background: var(--card); border: 1px solid rgba(230, 43, 138, .45);
