@@ -450,3 +450,9 @@ test('next ride is the soonest upcoming unfinished ride', () => {
   ]
   assert.equal(P.nextUpcoming(rides, now).id, 'next')
 })
+
+test('a failed ride fetch is an error with nothing to paint, and an empty list is not an error', () => {
+  assert.equal(P.ridePageModel({ error: { message: 'fail' }, rides: [] }).view, 'error')
+  assert.equal(P.ridePageModel({ error: null, rides: [] }).view, 'empty')
+  assert.equal(P.ridePageModel({ error: { message: 'stale' }, rides: [{ id: 'r' }] }).view, 'ready')
+})

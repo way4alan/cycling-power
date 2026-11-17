@@ -83,6 +83,7 @@ let guidelineCache = []
 let adminCache = []
 let lbPainted = false
 let ridesReady = false
+let rideRenderToken = 0
 let savingProfile = false
 let gesture = null
 let confettiFrame = 0
@@ -239,6 +240,18 @@ function compass(deg) {
   const i = Math.round((Number(deg) % 360) / 22.5) % 16
   return dirs[i] + '風'
 }
+function fetchTimed(url, ms) {
+  const limit = ms || 8000
+  if (typeof AbortController === 'undefined') {
+    return Promise.race([
+      fetch(url),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), limit))
+    ])
+  }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), limit)
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer))
+}
 async function fetchWeather(lat, lng, date) {
   const key = cacheKey('w', date, lat, lng)
   const cached = readCache(key)
@@ -251,7 +264,7 @@ async function fetchWeather(lat, lng, date) {
       const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lng +
         '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant' +
         '&timezone=Asia/Taipei&start_date=' + date + '&end_date=' + date
-      const res = await fetch(url)
+      const res = await fetchTimed(url)
       const data = await res.json()
       const d = data.daily
       if (!d) return null
@@ -275,7 +288,7 @@ async function fetchAqi(lat, lng, date) {
   if (DEMO) value = 42
   else {
     try {
-      const res = await fetch('https://api.waqi.info/feed/geo:' + lat + ';' + lng + '/?token=' + AQICN_TOKEN)
+      const res = await fetchTimed('https://api.waqi.info/feed/geo:' + lat + ';' + lng + '/?token=' + AQICN_TOKEN)
       const data = await res.json()
       if (data.status !== 'ok') return null
       value = data.data.aqi
@@ -534,6 +547,19 @@ async function probeSchema() {
   }))
 }
 async function loadRideState() {
+  if (DEMO && params.get('rides') === 'fail') {
+    rideState.rides = []
+    rideState.regs = []
+    rideState.atts = []
+    rideState.groups = []
+    rideState.routes = []
+    rideState.templates = []
+    rideState.templateGroups = []
+    rideState.ridesError = { message: 'fail' }
+    rideState.attsError = null
+    myRegByRide = new Map()
+    return
+  }
   const ridesRes = await db.from('rides').select('*').order('date', { ascending: false })
   rideState.rides = ridesRes.data || []
   rideState.ridesError = ridesRes.error || null
@@ -1592,8 +1618,13 @@ function createDemoDb() {
       return { data: Array.isArray(this.payload) ? created : created[0], error: null }
     }
     if (this.op === 'update') {
-      rows.forEach(r => { if (this.matchRow(r)) Object.assign(r, this.payload) })
-      return { data: null, error: null }
+      const changed = []
+      rows.forEach(r => {
+        if (!this.matchRow(r)) return
+        Object.assign(r, this.payload)
+        changed.push(Object.assign({}, r))
+      })
+      return { data: changed, error: null }
     }
     if (this.op === 'delete') {
       store[this.table] = rows.filter(r => !this.matchRow(r))
@@ -2073,13 +2104,13 @@ function bikeCard(bike, today) {
   const wheelHtml = wheels.map(wheel => {
     const wheelParts = PaceGear.sortConsumables(gearState.components.filter(part => part.wheelset_id === wheel.id), today)
     return `<div class="wheel-block">
-      <div class="wheel-head"><b>${esc(wheel.name)}</b>${wheel.mounted ? '<span class="wheel-tag">目前裝在這台</span>' : ''}</div>
+      <div class="wheel-head"><b>${esc(wheel.name)}</b><span class="wheel-actions"><button class="name-edit" type="button" data-act="gear-rename-wheel" data-id="${esc(wheel.id)}">改名稱</button>${wheel.mounted ? '<span class="wheel-tag">目前裝在這台</span>' : ''}</span></div>
       <div class="wheel-km">${esc(String(wheel.odometer_km))} km</div>
       ${wheelParts.map(part => consumableButton(part, today, bike)).join('')}
     </div>`
   }).join('')
   return `<article class="bike-card">
-    <h3>${esc(bike.name)}</h3>
+    <div class="bike-title-row"><h3>${esc(bike.name)}</h3><button class="name-edit" type="button" data-act="gear-rename-bike" data-id="${esc(bike.id)}">改名稱</button></div>
     <p class="bike-meta">${esc([bike.brand, String(bike.odometer_km) + ' km'].filter(Boolean).join(' · '))}</p>
     ${parts.map(part => consumableButton(part, today, bike)).join('')}
     ${wheelHtml}
@@ -2276,6 +2307,8 @@ function renderGearSheet() {
   if (!gearOpen || !gearSheet) { sheet.hidden = true; body.innerHTML = ''; return }
   sheet.hidden = false
   if (gearSheet === 'add') body.innerHTML = addBikeSheet()
+  else if (gearSheet === 'rename-bike') body.innerHTML = renameBikeSheet()
+  else if (gearSheet === 'rename-wheel') body.innerHTML = renameWheelSheet()
   else if (gearSheet === 'mileage') body.innerHTML = mileageSheet()
   else if (gearSheet === 'wheels') body.innerHTML = wheelsSheet()
   else if (gearSheet === 'part') body.innerHTML = partSheet()
@@ -2294,6 +2327,21 @@ function addBikeSheet() {
     <div class="form-row"><label for="gear-odo">目前里程 km（選填）</label><input id="gear-odo" type="number" min="0" step="1" placeholder="0"></div>
     <p class="field-help">建立後會自動加上「原廠輪組」。</p>
     <button class="save-btn sheet-primary" type="button" data-act="gear-create">建立</button>`
+}
+function renameBikeSheet() {
+  const bike = gearState.bikes.find(row => row.id === gearBikeId)
+  if (!bike) return ''
+  return `${sheetHead('修改車名')}
+    <div class="form-row"><label for="gear-rename">車名</label><input id="gear-rename" type="text" maxlength="80" value="${esc(bike.name)}"></div>
+    <div class="form-row"><label for="gear-brand">品牌（選填）</label><input id="gear-brand" type="text" maxlength="80" value="${esc(bike.brand || '')}"></div>
+    <button class="save-btn sheet-primary" type="button" data-act="gear-save-name" data-kind="bike" data-id="${esc(bike.id)}">儲存</button>`
+}
+function renameWheelSheet() {
+  const wheel = gearState.wheelsets.find(row => row.id === gearPartId)
+  if (!wheel) return ''
+  return `${sheetHead('修改輪組名稱')}
+    <div class="form-row"><label for="gear-rename">輪組名稱</label><input id="gear-rename" type="text" maxlength="80" value="${esc(wheel.name)}"></div>
+    <button class="save-btn sheet-primary" type="button" data-act="gear-save-name" data-kind="wheel" data-id="${esc(wheel.id)}">儲存</button>`
 }
 function mileageSheet() {
   const bikes = gearBikes()
@@ -2531,6 +2579,26 @@ function openGarage() {
   switchTab('profile')
   gearOpen = true
   gearSheet = ''
+  renderGear()
+}
+async function saveGearName(kind, id) {
+  const cleaned = globalThis.PaceGear ? PaceGear.cleanGearName(document.getElementById('gear-rename') && document.getElementById('gear-rename').value) : { ok: false, message: '請填名稱' }
+  if (!cleaned.ok) { showToast(cleaned.message || '請填名稱'); return }
+  const patch = { name: cleaned.name }
+  if (kind === 'bike') {
+    const brand = PaceGear.cleanGearName(document.getElementById('gear-brand') && document.getElementById('gear-brand').value, { allowEmpty: true })
+    if (!brand.ok) { showToast(brand.message); return }
+    patch.brand = brand.name
+  }
+  const table = kind === 'wheel' ? 'wheelsets' : 'bikes'
+  const res = await db.from(table).update(patch).eq('id', id).select('id')
+  if (!res || res.error || (Array.isArray(res.data) && !res.data.length)) {
+    showToast('名稱沒有存起來')
+    return
+  }
+  showToast('已更新名稱')
+  gearSheet = ''
+  await loadGear()
   renderGear()
 }
 async function createBike() {
@@ -2778,9 +2846,12 @@ function renderPacePrompts() {
     const badges = group.badges.map(b => {
       const spec = PaceChallenges.BADGES[b.key] || { name: b.key }
       const tier = tierLabel(b.tier)
+      const source = (pacePrompts.badges || []).find(item => item.id === b.id) || {}
       const west = b.key === 'west_wuling' && formatElapsed(group.elapsedSec)
         ? `<span class="prompt-west">埔里到武嶺 ${esc(formatElapsed(group.elapsedSec))}</span>` : ''
-      return `<div class="prompt-badge">${PaceBadgeArt.card(b.key, b.tier)}<div><b>${esc(spec.name)}${tier ? ' · ' + esc(tier) : ''}</b>${west}<div class="prompt-actions"><button class="save-btn" type="button" data-act="badge-yes" data-id="${esc(b.id)}">確認，發給我</button><button class="cancel-btn" type="button" data-act="badge-no" data-id="${esc(b.id)}">不是這次</button></div></div></div>`
+      const err = source.saveError ? `<p class="prompt-error">${esc(source.saveError)}</p>` : ''
+      const yes = source.saving ? '儲存中…' : '確認，發給我'
+      return `<div class="prompt-badge">${PaceBadgeArt.card(b.key, b.tier)}<div><b>${esc(spec.name)}${tier ? ' · ' + esc(tier) : ''}</b>${west}<div class="prompt-actions"><button class="save-btn" type="button" data-act="badge-yes" data-id="${esc(b.id)}" ${source.saving ? 'disabled' : ''}>${yes}</button><button class="cancel-btn" type="button" data-act="badge-no" data-id="${esc(b.id)}" ${source.saving ? 'disabled' : ''}>不是這次</button></div>${err}</div></div>`
     }).join('')
     const all = group.badges.length > 1
       ? `<button class="save-btn" type="button" data-act="badge-yes-all" data-ids="${esc(group.badges.map(b => b.id).join(','))}">這場都確認</button>` : ''
@@ -2850,24 +2921,66 @@ function showBadgeInfo(key, tier) {
   document.getElementById('badge-note-body').textContent = badgeCopy(key)
   note.hidden = false
 }
-function acceptBadgePrompt(id) {
+function rpcFailureMessage(error) {
+  if (globalThis.PaceChallenges && PaceChallenges.promptFailureMessage) return PaceChallenges.promptFailureMessage(error)
+  return '沒有記起來，請再試一次'
+}
+async function persistRpc(name, args) {
+  if (DEMO) {
+    if (name === 'confirm_my_badge' && params.get('badge') === 'fail') return { ok: false, error: { code: '42501', message: 'forbidden' } }
+    return { ok: true }
+  }
+  try {
+    const res = await db.rpc(name, args)
+    if (res && res.error) return { ok: false, error: res.error }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: { message: e && e.message } }
+  }
+}
+async function acceptBadgePrompt(id) {
   const row = pacePrompts.badges.find(item => item.id === id)
-  if (!row || !myProfile) return
+  if (!row || !myProfile || row.saving || row.status === 'confirmed') return
+  row.saving = true
+  row.saveError = ''
+  renderPacePrompts()
+  const result = await persistRpc('confirm_my_badge', { prompt_id: id })
+  row.saving = false
+  if (!result.ok) {
+    row.status = 'pending'
+    row.saveError = rpcFailureMessage(result.error)
+    renderPacePrompts()
+    showToast(row.saveError)
+    return
+  }
   row.key = row.badge_key || row.key
   const mine = currentRider() || { id: myData && myData.id, line_user_id: myProfile.line_user_id }
   const next = PaceChallenges.applyBadgeDecision(badgeListFor(mine), row, true)
   rememberBadges(mine.id, mine.line_user_id, next)
   row.status = 'confirmed'
-  if (!DEMO) db.rpc('confirm_my_badge', { prompt_id: id })
+  row.saveError = ''
   renderSummitWall()
   renderPacePrompts()
   renderLeaderboard()
   showToast('已加上徽章')
 }
-function declineBadgePrompt(id) {
+async function declineBadgePrompt(id) {
   const row = pacePrompts.badges.find(item => item.id === id)
-  if (row) row.status = 'dismissed'
-  if (!DEMO) db.rpc('dismiss_my_prompt', { kind: 'badge', prompt_id: id })
+  if (!row || row.saving) return
+  row.saving = true
+  row.saveError = ''
+  renderPacePrompts()
+  const result = await persistRpc('dismiss_my_prompt', { kind: 'badge', prompt_id: id })
+  row.saving = false
+  if (!result.ok) {
+    row.status = 'pending'
+    row.saveError = rpcFailureMessage(result.error)
+    renderPacePrompts()
+    showToast(row.saveError)
+    return
+  }
+  row.status = 'dismissed'
+  row.saveError = ''
   renderPacePrompts()
 }
 function acceptFtpPrompt() {
@@ -3373,12 +3486,10 @@ function challengeBrief(r) {
   if (!rows.length) return ''
   return `<section class="challenge-brief"><h3>年度挑戰</h3>${rows.map(([label, value]) => `<div><b>${label}</b><p>${esc(value)}</p></div>`).join('')}</section>`
 }
-async function renderRides() {
-  const list = document.getElementById('ride-list')
-  if (!ridesReady) list.innerHTML = '<div class="skel lg"></div><div class="skel lg"></div><div class="skel md"></div>'
-  await loadRideState()
-  if (rideState.ridesError && !(rideState.rides || []).length) { list.innerHTML = '<div class="empty-state">無法載入團騎</div>'; return }
-  const rides = rideState.rides || []
+function rideErrorHtml() {
+  return `<div class="empty-state ride-error" id="ride-error"><p>無法載入團騎</p><button class="save-btn" type="button" data-act="retry-rides">再試一次</button></div>`
+}
+function rideListMarkup(rides, weatherById) {
   const finishedRides = rides.filter(r => r.is_finished && !r.cancelled)
   const totalRides = finishedRides.length
   const totalAttendances = (rideState.atts || []).length
@@ -3388,46 +3499,33 @@ async function renderRides() {
     <div class="ride-stat"><div class="val">${totalAttendances}</div><div class="lbl">總出席人次</div></div>
     <div class="ride-stat"><div class="val">${myAttendances}</div><div class="lbl">我的出席</div></div>
   </div></div>`
-  if (!rides.length) {
-    ridesReady = true
-    list.innerHTML = statsHtml + '<div class="empty-state">目前沒有團騎公告</div>'
-    return
-  }
+  if (!rides.length) return statsHtml + '<div class="empty-state">目前沒有團騎公告</div>'
   const allRegs = rideState.regs || []
   const allAtts = rideState.atts || []
-  const cards = await Promise.all(rides.map(async r => {
+  const cards = rides.map(r => {
+    const extra = (weatherById && weatherById.get(r.id)) || {}
     const loc = splitLoc(r.location)
-    let lat = r.weather_lat
-    let lng = r.weather_lng
-    if (!lat || !lng) {
-      const wLoc = allWeatherLocations.find(l => l.name === '高雄市區')
-      if (wLoc) { lat = wLoc.lat; lng = wLoc.lng }
-    }
-    let weather = null
-    let aqi = null
-    if (lat && lng && r.date) {
-      const pair = await Promise.all([fetchWeather(lat, lng, r.date), fetchAqi(lat, lng, r.date)])
-      weather = pair[0]
-      aqi = pair[1]
-    }
-    const rideRegs = (allRegs || []).filter(reg => reg.ride_id === r.id)
-    const rideAtts = (allAtts || []).filter(att => att.ride_id === r.id)
+    const weather = extra.weather || null
+    const aqi = extra.aqi == null ? null : extra.aqi
+    const rideRegs = allRegs.filter(reg => reg.ride_id === r.id)
+    const rideAtts = allAtts.filter(att => att.ride_id === r.id)
     let group = ''
     if (rideAtts.length) {
       const attRiders = rideAtts.map(riderForAttendance).filter(Boolean)
       if (attRiders.length) {
         const avg = attRiders.reduce((s, rr) => s + wkg(rr), 0) / attRiders.length
         const speeds = calcGroupSpeed(avg)
-        if (!speeds) return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), myReg: myRegByRide.get(r.id), squads: (rideState.groups || []).filter(g => g.ride_id === r.id), weather, aqi, group: '', loc })
-        group = `<div class="group-stats-card"><div class="group-stats-title">${icon('activity', 14)}當天出席戰力分析</div><div class="group-stats-grid">
-          <div class="group-stat"><div class="val">${attRiders.length}</div><div class="lbl">出席人數</div></div>
-          <div class="group-stat"><div class="val">${avg.toFixed(2)}</div><div class="lbl">平均 W/kg</div></div>
-          <div class="group-stat"><div class="val">${speeds.group}</div><div class="lbl">集團巡航 km/h</div></div>
-        </div></div>`
+        if (speeds) {
+          group = `<div class="group-stats-card"><div class="group-stats-title">${icon('activity', 14)}當天出席戰力分析</div><div class="group-stats-grid">
+            <div class="group-stat"><div class="val">${attRiders.length}</div><div class="lbl">出席人數</div></div>
+            <div class="group-stat"><div class="val">${avg.toFixed(2)}</div><div class="lbl">平均 W/kg</div></div>
+            <div class="group-stat"><div class="val">${speeds.group}</div><div class="lbl">集團巡航 km/h</div></div>
+          </div></div>`
+        }
       }
     }
     return rideCardHtml(r, { regs: rideRegs, mine: myRegByRide.has(r.id), myReg: myRegByRide.get(r.id), squads: (rideState.groups || []).filter(g => g.ride_id === r.id), weather, aqi, group, loc })
-  }))
+  })
   const activeIdx = rides.map((r, i) => ({ r, i })).filter(x => !x.r.is_finished && !x.r.cancelled)
   activeIdx.sort((a, b) => String(a.r.date).localeCompare(String(b.r.date)) || String(a.r.time || '').localeCompare(String(b.r.time || '')))
   const activeCards = activeIdx.map(x => cards[x.i])
@@ -3436,11 +3534,75 @@ async function renderRides() {
     <button class="finished-header" type="button" data-act="toggle-finished"><span>已結束或取消（${finishedCards.length}）</span><span id="finished-arrow">${icon('chevron-down', 16)}</span></button>
     <div id="finished-list" hidden>${finishedCards.join('')}</div>
   </div>` : ''
+  return statsHtml + activeCards.join('') + finishedSection
+}
+async function loadRideWeather(rides) {
+  const map = new Map()
+  const targets = (rides || []).filter(r => r && !r.is_finished && !r.cancelled && r.date)
+  let cursor = 0
+  async function one(r) {
+    let lat = r.weather_lat
+    let lng = r.weather_lng
+    if (!lat || !lng) {
+      const wLoc = allWeatherLocations.find(l => l.name === '高雄市區')
+      if (wLoc) { lat = wLoc.lat; lng = wLoc.lng }
+    }
+    if (!lat || !lng) return
+    const pair = await Promise.all([fetchWeather(lat, lng, r.date), fetchAqi(lat, lng, r.date)])
+    map.set(r.id, { weather: pair[0], aqi: pair[1] })
+  }
+  async function worker() {
+    while (cursor < targets.length) {
+      const ride = targets[cursor++]
+      try { await one(ride) } catch (e) { /* 天氣失敗不擋住團騎 */ }
+    }
+  }
+  const workers = Math.min(4, targets.length)
+  await Promise.all(Array.from({ length: workers }, worker))
+  return map
+}
+async function renderRides() {
+  const list = document.getElementById('ride-list')
+  if (!list) return
+  const token = ++rideRenderToken
+  if (!ridesReady) list.innerHTML = '<div class="skel lg"></div><div class="skel lg"></div><div class="skel md"></div>'
+  try {
+    await loadRideState()
+  } catch (e) {
+    if (token !== rideRenderToken) return
+    ridesReady = false
+    rideState.ridesError = rideState.ridesError || { message: 'fail' }
+    list.innerHTML = rideErrorHtml()
+    return
+  }
+  if (token !== rideRenderToken) return
+  const rides = rideState.rides || []
+  const model = (globalThis.PaceCore && PaceCore.ridePageModel)
+    ? PaceCore.ridePageModel({ error: rideState.ridesError, rides })
+    : (rideState.ridesError && !rides.length ? { view: 'error' } : (rides.length ? { view: 'ready' } : { view: 'empty' }))
+  if (model.view === 'error') {
+    ridesReady = false
+    list.innerHTML = rideErrorHtml()
+    return
+  }
   const first = !ridesReady
   ridesReady = true
-  list.innerHTML = statsHtml + activeCards.join('') + finishedSection
+  list.innerHTML = rideListMarkup(rides, new Map())
   list.classList.toggle('rise', first)
   renderNextRide()
+  tickCountdowns()
+  if (!rides.length) return
+  const weather = await loadRideWeather(rides)
+  if (token !== rideRenderToken || !weather.size) return
+  const openFinished = document.getElementById('finished-list')
+  const finishedOpen = openFinished ? !openFinished.hidden : false
+  list.innerHTML = rideListMarkup(rides, weather)
+  if (finishedOpen) {
+    const box = document.getElementById('finished-list')
+    const arrow = document.getElementById('finished-arrow')
+    if (box) box.hidden = false
+    if (arrow) arrow.style.transform = 'rotate(180deg)'
+  }
   tickCountdowns()
 }
 function tickCountdowns() {
@@ -4038,6 +4200,10 @@ function onGlobalClick(e) {
   else if (act === 'gear-close') { gearOpen = false; gearSheet = ''; renderGear(); syncChrome() }
   else if (act === 'gear-open-screen' || act === 'gear-home') openGarage()
   else if (act === 'gear-add') { gearOpen = true; gearSheet = 'add'; renderGearSheet() }
+  else if (act === 'gear-rename-bike') { gearBikeId = el.dataset.id; gearSheet = 'rename-bike'; renderGearSheet() }
+  else if (act === 'gear-rename-wheel') { gearPartId = el.dataset.id; gearSheet = 'rename-wheel'; renderGearSheet() }
+  else if (act === 'gear-save-name') saveGearName(el.dataset.kind, el.dataset.id)
+  else if (act === 'retry-rides') { ridesReady = false; renderRides() }
   else if (act === 'gear-mileage') { gearSheet = 'mileage'; renderGearSheet() }
   else if (act === 'gear-wheels') { gearBikeId = el.dataset.id; gearSheet = 'wheels'; renderGearSheet() }
   else if (act === 'gear-part') { gearPartId = el.dataset.id; gearAdvanced = false; gearSheet = 'part'; renderGearSheet() }
@@ -4054,7 +4220,10 @@ function onGlobalClick(e) {
   else if (act === 'badge-info') showBadgeInfo(el.dataset.key, el.dataset.tier)
   else if (act === 'badge-close') { const note = document.getElementById('badge-note'); if (note) note.hidden = true }
   else if (act === 'badge-yes') acceptBadgePrompt(el.dataset.id)
-  else if (act === 'badge-yes-all') String(el.dataset.ids || '').split(',').filter(Boolean).forEach(acceptBadgePrompt)
+  else if (act === 'badge-yes-all') {
+    const ids = String(el.dataset.ids || '').split(',').filter(Boolean)
+    ;(async () => { for (const id of ids) await acceptBadgePrompt(id) })()
+  }
   else if (act === 'badge-no') declineBadgePrompt(el.dataset.id)
   else if (act === 'ftp-yes') acceptFtpPrompt()
   else if (act === 'ftp-no') declineFtpPrompt()

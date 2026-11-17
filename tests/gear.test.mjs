@@ -313,3 +313,10 @@ test('strava import only keeps bike sports and auto-assigns a single setup', () 
   assert.equal(ask.status, 'pending')
   assert.match(ask.notice, /哪台車/)
 })
+
+test('bike and wheelset names trim to a non-empty name of at most 80 characters', () => {
+  assert.deepEqual(G.cleanGearName('  Madone   SLR  '), { ok: true, name: 'Madone SLR' })
+  assert.equal(G.cleanGearName('   ').ok, false)
+  assert.equal(G.cleanGearName('輪'.repeat(81)).ok, false)
+  assert.deepEqual(G.cleanGearName('   ', { allowEmpty: true }), { ok: true, name: '' })
+})

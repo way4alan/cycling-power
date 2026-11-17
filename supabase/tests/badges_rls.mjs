@@ -107,6 +107,48 @@ async function main() {
   const offerPriv = await sql(`select has_function_privilege('anon', 'public.offer_badge_prompts(text, jsonb)', 'execute')`)
   check('anon cannot offer badge prompts', offerPriv === 'f' || offerPriv === 'false', offerPriv)
 
+  const pendingLeft = await sql(`select count(*) from public.badge_prompts where id = '${prompt}' and status = 'pending'`)
+  check('confirming a badge takes it off the pending list', pendingLeft === '0', pendingLeft)
+
+  await sql(`select public.offer_badge_prompts('${ME}', '[{"badge_key":"alishan","tier":"","earned_on":"2026-03-29","strava_activity_id":null}]'::jsonb)`)
+  await sql(`select public.offer_badge_prompts('${ME}', '[{"badge_key":"alishan","tier":"","earned_on":"2026-03-29"}]'::jsonb)`)
+  check('a null activity id does not open a second pending badge',
+    (await sql(`select count(*) from public.badge_prompts where line_user_id = '${ME}' and badge_key = 'alishan' and status = 'pending'`)) === '1')
+  await sql(`select public.offer_badge_prompts('${OTHER}', '[{"badge_key":"alishan","tier":"","earned_on":"2026-03-29","strava_activity_id":null}]'::jsonb)`)
+  check('a different member can still have their own pending badge',
+    (await sql(`select count(*) from public.badge_prompts where line_user_id in ('${ME}', '${OTHER}') and badge_key = 'alishan' and status = 'pending'`)) === '2')
+
+  await sql(`insert into public.badge_prompts (line_user_id, badge_key, tier, earned_on, strava_activity_id)
+    values ('${ME}', 'shanlinxi', '', current_date, '')`)
+  let duplicateRejected = false
+  try {
+    await sql(`insert into public.badge_prompts (line_user_id, badge_key, tier, earned_on, strava_activity_id)
+      values ('${ME}', 'shanlinxi', '', current_date, '')`)
+  } catch (error) {
+    duplicateRejected = /duplicate|unique/i.test(String(error.stderr || error.message || ''))
+  }
+  check('the pending unique index rejects a second blank activity row', duplicateRejected)
+
+  const badgesBefore = await sql(`select count(*) from public.member_badges where line_user_id = '${ME}'`)
+  const confirmedBefore = await sql(`select count(*) from public.badge_prompts where line_user_id = '${ME}' and status = 'confirmed'`)
+  await sql(`delete from public.badge_prompts as p
+    where p.status = 'pending'
+      and p.id in (
+        select ranked.id from (
+          select id, row_number() over (
+            partition by line_user_id, badge_key
+            order by earned_on asc, created_at asc
+          ) as n
+          from public.badge_prompts
+          where status = 'pending'
+        ) as ranked
+        where ranked.n > 1
+      )`)
+  check('deduping pending prompts does not delete confirmed badges',
+    (await sql(`select count(*) from public.member_badges where line_user_id = '${ME}'`)) === badgesBefore, badgesBefore)
+  check('deduping pending prompts does not delete confirmed prompts',
+    (await sql(`select count(*) from public.badge_prompts where line_user_id = '${ME}' and status = 'confirmed'`)) === confirmedBefore, confirmedBefore)
+
   if (failed) process.exit(1)
 }
 
