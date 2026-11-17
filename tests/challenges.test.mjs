@@ -51,6 +51,10 @@ test('west wuling tiers use elapsed time and a higher grade replaces a lower one
     { key: 'west_wuling', tier: 'sub2' },
     { key: 'wuling', tier: '' }
   ])
+  assert.deepEqual(C.keepBest([{ badge_key: 'alishan', earned_on: '2026-03-29' }]), [
+    { key: 'alishan', tier: '' }
+  ])
+  assert.deepEqual(C.keepBest([{ badge_key: 'not-a-badge' }, { key: undefined }, {}]), [])
 })
 
 test('verified summits match and unverified finishes do not invent a geofence', () => {

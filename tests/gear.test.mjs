@@ -314,6 +314,15 @@ test('strava import only keeps bike sports and auto-assigns a single setup', () 
   assert.match(ask.notice, /哪台車/)
 })
 
+test('my garage keeps only my rows', () => {
+  const rows = [
+    { id: 'mine', line_user_id: 'me', name: 'Madone' },
+    { id: 'other', line_user_id: 'other', name: 'Addict RC PRO' }
+  ]
+  assert.deepEqual(G.ownedGear(rows, 'me').map(row => row.name), ['Madone'])
+  assert.deepEqual(G.ownedGear(rows, ''), [])
+})
+
 test('bike and wheelset names trim to a non-empty name of at most 80 characters', () => {
   assert.deepEqual(G.cleanGearName('  Madone   SLR  '), { ok: true, name: 'Madone SLR' })
   assert.equal(G.cleanGearName('   ').ok, false)
