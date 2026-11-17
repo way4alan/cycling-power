@@ -831,6 +831,11 @@ input[type=range]::-moz-range-thumb {
 .strava-actions { display: flex; gap: 8px; margin-top: 8px; }
 .strava-actions .cancel-btn { flex: 1; width: auto; }
 .strava-card select { width: 100%; }
+.strava-map-card { margin-top: 12px; }
+.strava-map-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.strava-map-name { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; }
+.strava-map-row select { flex: 1; min-width: 0; }
+.gear-delete { margin-top: 8px; color: #FF6B78; }
 .strava-return { margin: 0 0 12px; }
 .strava-official {
   width: 100%; height: 48px; border: 0; border-radius: 4px; background: #FC5200; color: #fff;

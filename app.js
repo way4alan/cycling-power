@@ -1367,7 +1367,7 @@ function buildDemoGear(day) {
     }
   })
   return {
-    bikes: [bike],
+    bikes: [bike, { id: 'bike-other', line_user_id: 'demo-other', name: 'Addict RC PRO', brand: 'Scott', strava_gear_id: '', odometer_km: 3200, archived: false }],
     wheelsets: [seeded.wheelset, aero],
     gear_components: seeded.components.concat(aeroParts),
     chain_replacements: [
@@ -2037,11 +2037,13 @@ async function loadGear() {
   const wheels = await db.from('wheelsets').select('*')
   const parts = await db.from('gear_components').select('*')
   const history = await db.from('chain_replacements').select('*')
+  const mine = myProfile && myProfile.line_user_id
+  const own = (rows) => (globalThis.PaceGear ? PaceGear.ownedGear(rows, mine) : [])
   gearState = {
-    bikes: bikes.data || [],
-    wheelsets: wheels.data || [],
-    components: parts.data || [],
-    replacements: history.error ? [] : (history.data || [])
+    bikes: own(bikes.data),
+    wheelsets: own(wheels.data),
+    components: own(parts.data),
+    replacements: history.error ? [] : own(history.data)
   }
   await loadStravaLink()
 }
@@ -2115,12 +2117,13 @@ function bikeCard(bike, today) {
     ${parts.map(part => consumableButton(part, today, bike)).join('')}
     ${wheelHtml}
     <button class="cancel-btn" type="button" data-act="gear-wheels" data-id="${esc(bike.id)}">換輪組</button>
+    <button class="cancel-btn gear-delete" type="button" data-act="gear-archive" data-id="${esc(bike.id)}">刪除這台車</button>
   </article>`
 }
 function demoStrava() {
   if (stravaLink.demoReady) return stravaLink
   const open = params.get('open')
-  const connected = open === 'strava-connected' || open === 'strava-pending' || open === 'strava-ok'
+  const connected = open === 'strava-connected' || open === 'strava-pending' || open === 'strava-ok' || params.get('strava') === '1'
   return {
     connected,
     demoReady: true,
@@ -2151,7 +2154,12 @@ async function loadPaceRecords() {
       if (!grouped[row.rider_id]) grouped[row.rider_id] = []
       grouped[row.rider_id].push(row)
     })
-    Object.keys(grouped).forEach(id => rememberBadges(id, '', grouped[id]))
+    Object.keys(grouped).forEach(id => rememberBadges(id, '', grouped[id].map(row => ({
+      key: row.badge_key,
+      badge_key: row.badge_key,
+      tier: row.tier || '',
+      earned_on: row.earned_on || ''
+    }))))
   }
   const prompts = await db.from('badge_prompts').select('id,badge_key,tier,earned_on,status,strava_activity_id,activity_name,started_at,distance_km,elevation_gain_m,elapsed_sec').eq('status', 'pending')
   const checkins = await db.from('ride_checkin_prompts').select('id,ride_id,ride_title,ride_date,status').eq('status', 'pending')
@@ -2210,14 +2218,6 @@ function stravaSection(bikes) {
     return `<button class="strava-official" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect"><span>Connect with Strava</span></button>
       <p class="field-help">只會讀取你自己的騎乘與 FTP，用來提醒保養、出席和徽章。確認後才會變成 PACE 的紀錄。可隨時中斷連結並刪除暫存。</p>`
   }
-  const suggestions = PaceGear.suggestStravaBikes(bikes, stravaLink.gear)
-  const maps = bikes.map(bike => {
-    const picked = bike.strava_gear_id || ((suggestions.find(row => row.bikeId === bike.id) || {}).stravaGearId) || ''
-    const options = ['<option value="">不對應</option>'].concat((stravaLink.gear || []).map(gear =>
-      `<option value="${esc(String(gear.id))}" ${String(gear.id) === String(picked) ? 'selected' : ''}>${esc(gear.name)}</option>`
-    ))
-    return `<div class="form-row"><label for="strava-map-${esc(bike.id)}">${esc(bike.name)}</label><select id="strava-map-${esc(bike.id)}" data-id="${esc(bike.id)}" onchange="saveStravaMap(this)">${options.join('')}</select></div>`
-  }).join('')
   const rides = pending.map(row => {
     const when = PaceGear.formatChainDate(row.occurred_on)
     return `<button class="gear-line" type="button" data-act="strava-ride" data-id="${esc(row.id)}">
@@ -2233,8 +2233,22 @@ function stravaSection(bikes) {
       <button class="cancel-btn" type="button" data-act="strava-sync">立即同步</button>
       <button class="cancel-btn" type="button" data-act="strava-disconnect">中斷連結</button>
     </div>
-    <h3>對應你的車</h3>
-    ${maps || '<p class="field-help">Strava 上還沒有車可以對應。</p>'}
+  </section>`
+}
+function stravaMapSection(bikes) {
+  const gear = stravaLink.gear || []
+  if (!stravaLink.connected || !gear.length || !bikes.length) return ''
+  const rows = gear.map(item => {
+    const owner = bikes.find(bike => String(bike.strava_gear_id || '') === String(item.id))
+    const options = ['<option value="">不對到任何一台</option>'].concat(bikes.map(bike =>
+      `<option value="${esc(bike.id)}" ${owner && owner.id === bike.id ? 'selected' : ''}>${esc(bike.name)}</option>`
+    ))
+    return `<div class="strava-map-row"><div class="strava-map-name">${esc(item.name)}</div><select data-strava="${esc(String(item.id))}" aria-label="${esc(item.name)} 對到哪一台" onchange="saveStravaMap(this)">${options.join('')}</select></div>`
+  }).join('')
+  return `<section class="strava-card strava-map-card">
+    <h3>把 Strava 的車對到車庫</h3>
+    <p class="field-help">左邊是 Strava 上的車名，右邊選車庫裡的同一台。沒選的騎乘不會自動記到車。</p>
+    ${rows}
   </section>`
 }
 function stravaRideSheet() {
@@ -2276,7 +2290,8 @@ function garageHtml() {
     <div class="garage-actions"><button class="save-btn" type="button" data-act="gear-mileage">＋ 新增里程</button></div>
     ${stravaSection(bikes)}
     ${bikes.map(bike => bikeCard(bike, today)).join('')}
-    <button class="cancel-btn" type="button" data-act="gear-add">新增一台車</button>`
+    ${stravaMapSection(bikes)}
+    <button class="cancel-btn" type="button" data-act="gear-add" id="gear-add-btn">新增一台車</button>`
 }
 function renderGear() {
   const home = document.getElementById('profile-home')
@@ -2441,13 +2456,21 @@ function stravaBikeChanged() {
   renderGearSheet()
 }
 async function saveStravaMap(select) {
-  const id = select.dataset.id
-  const value = select.value || null
-  const res = await db.from('bikes').update({ strava_gear_id: value }).eq('id', id)
-  if (res.error) { showToast('沒有對上'); return }
-  const bike = gearState.bikes.find(row => row.id === id)
-  if (bike) bike.strava_gear_id = value
-  showToast('已對應')
+  const stravaId = select.dataset.strava || ''
+  const bikeId = select.value || ''
+  const bikes = gearBikes()
+  for (const bike of bikes) {
+    const had = String(bike.strava_gear_id || '') === String(stravaId)
+    const chosen = bike.id === bikeId
+    if (!had && !chosen) continue
+    const next = chosen ? stravaId : ''
+    if (String(bike.strava_gear_id || '') === next) continue
+    const res = await db.from('bikes').update({ strava_gear_id: next }).eq('id', bike.id).select('id')
+    if (!res || res.error || (Array.isArray(res.data) && !res.data.length)) { showToast('沒有對上'); return }
+    bike.strava_gear_id = next
+  }
+  showToast(bikeId ? '已對到這台車' : '已取消對應')
+  renderGear()
 }
 function renderStravaReturn() {
   const host = document.getElementById('strava-return')
@@ -2601,34 +2624,66 @@ async function saveGearName(kind, id) {
   await loadGear()
   renderGear()
 }
+let gearCreating = false
 async function createBike() {
+  if (gearCreating) return
   const name = (document.getElementById('gear-name').value || '').trim()
   const brand = (document.getElementById('gear-brand').value || '').trim()
   const odo = Number(document.getElementById('gear-odo').value || 0)
   if (!name) { showToast('請填車名'); return }
-  const inserted = await db.from('bikes').insert({
-    line_user_id: myProfile.line_user_id, name, brand, odometer_km: Number.isFinite(odo) && odo > 0 ? odo : 0, archived: false
-  }).select('id')
-  if (inserted.error) { showToast('沒有存起來'); return }
-  const id = insertedId(inserted)
-  if (DEMO && id) {
-    const bundle = PaceGear.seedBike({ id, line_user_id: myProfile.line_user_id, created_on: taipeiToday() })
-    bundle.wheelset.id = 'wheel-' + id
-    bundle.components.forEach((part, i) => {
-      part.id = 'comp-' + id + '-' + i
-      part.last_service_date = taipeiToday()
-      if (part.wheelset_id) part.wheelset_id = bundle.wheelset.id
-    })
-    await db.from('wheelsets').insert(bundle.wheelset)
-    await db.from('gear_components').insert(bundle.components)
-    await db.from('chain_replacements').insert({
-      line_user_id: myProfile.line_user_id, bike_id: id, replaced_on: taipeiToday(), bike_km: Number.isFinite(odo) && odo > 0 ? odo : 0, note: '', brand: ''
-    })
+  gearCreating = true
+  const btn = document.querySelector('[data-act="gear-create"]')
+  if (btn) { btn.disabled = true; btn.textContent = '建立中…' }
+  try {
+    const inserted = await db.from('bikes').insert({
+      line_user_id: myProfile.line_user_id, name, brand, odometer_km: Number.isFinite(odo) && odo > 0 ? odo : 0, archived: false
+    }).select('id')
+    if (inserted.error) {
+      if (btn) { btn.disabled = false; btn.textContent = '建立' }
+      showToast('沒有存起來')
+      return
+    }
+    const id = insertedId(inserted)
+    if (DEMO && id) {
+      const bundle = PaceGear.seedBike({ id, line_user_id: myProfile.line_user_id, created_on: taipeiToday() })
+      bundle.wheelset.id = 'wheel-' + id
+      bundle.wheelset.name = '原廠輪組'
+      bundle.components.forEach((part, i) => {
+        part.id = 'comp-' + id + '-' + i
+        part.last_service_date = taipeiToday()
+        if (part.wheelset_id) part.wheelset_id = bundle.wheelset.id
+      })
+      await db.from('wheelsets').insert(bundle.wheelset)
+      await db.from('gear_components').insert(bundle.components)
+      await db.from('chain_replacements').insert({
+        line_user_id: myProfile.line_user_id, bike_id: id, replaced_on: taipeiToday(), bike_km: Number.isFinite(odo) && odo > 0 ? odo : 0, note: '', brand: ''
+      })
+    }
+    showToast('已建立，含原廠輪組')
+    gearOpen = true
+    gearSheet = ''
+    gearBikeId = id
+    await loadGear()
+    renderGear()
+    renderGearReminder()
+  } finally {
+    gearCreating = false
   }
-  showToast('已建立，含原廠輪組')
-  gearOpen = true
+}
+async function archiveBike(id) {
+  const bike = gearBikes().find(row => row.id === id)
+  if (!bike) return
+  const ok = await askConfirm({
+    title: '刪除這台車',
+    body: '「' + bike.name + '」會從車庫拿掉。里程和保養紀錄會留著。',
+    ok: '刪除這台車',
+    danger: true
+  })
+  if (!ok) return
+  const res = await db.from('bikes').update({ archived: true }).eq('id', id).select('id')
+  if (!res || res.error || (Array.isArray(res.data) && !res.data.length)) { showToast('沒有刪掉'); return }
+  showToast('已從車庫拿掉，紀錄還在')
   gearSheet = ''
-  gearBikeId = id
   await loadGear()
   renderGear()
   renderGearReminder()
@@ -2753,9 +2808,10 @@ function freshStravaRows(rows) {
   return PaceChallenges.purgeStravaCache(rows || [], new Date().toISOString())
 }
 function rememberBadges(riderId, lineId, list) {
-  const best = globalThis.PaceChallenges ? PaceChallenges.keepBest(list) : list
-  const rows = (best || []).map(b => {
-    const full = (list || []).find(row => row.key === b.key && (row.tier || '') === (b.tier || '')) || b
+  const badgeKeyOf = (row) => (row && (row.badge_key || row.key)) || ''
+  const best = globalThis.PaceChallenges ? PaceChallenges.keepBest(list) : (list || []).map(row => ({ key: badgeKeyOf(row), tier: row.tier || '' })).filter(row => row.key)
+  const rows = (best || []).filter(b => b.key && (!globalThis.PaceChallenges || PaceChallenges.BADGES[b.key])).map(b => {
+    const full = (list || []).find(row => badgeKeyOf(row) === b.key && (row.tier || '') === (b.tier || '')) || b
     return { key: b.key, tier: b.tier || '', earned_on: full.earned_on || '' }
   })
   if (riderId) badgeIndex[riderId] = rows
@@ -2787,6 +2843,11 @@ function seedDemoBadges() {
     ftp: open === 'ftp' ? { id: 'ftp-1', proposed_ftp: 318, status: 'pending' } : null
   }
   if (open === 'member') memberLineId = 'r1'
+  if (params.get('badges') === 'db') {
+    rememberBadges('r2', 'demo-me', [
+      { badge_key: 'alishan', tier: '', earned_on: '2026-03-29' }
+    ])
+  }
 }
 function renderSummitWall() {
   const host = document.getElementById('summit-wall')
@@ -4209,6 +4270,7 @@ function onGlobalClick(e) {
   else if (act === 'gear-part') { gearPartId = el.dataset.id; gearAdvanced = false; gearSheet = 'part'; renderGearSheet() }
   else if (act === 'gear-sheet-close') { gearSheet = ''; renderGearSheet() }
   else if (act === 'gear-create') createBike()
+  else if (act === 'gear-archive') archiveBike(el.dataset.id)
   else if (act === 'gear-wheel') addWheelset(el.dataset.id)
   else if (act === 'gear-mount') mountWheelset(el.dataset.id, el.dataset.bike)
   else if (act === 'gear-km') logGearKm()
