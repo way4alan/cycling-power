@@ -1572,6 +1572,19 @@ function createDemoDb() {
     store.gear_components = []
     store.chain_replacements = []
   }
+  if (params.get('lines') === '1') {
+    const shown = store.bikes.find(row => row.id === 'bike-madone')
+    if (shown) shown.odometer_km = 5200
+    store.gear_components.forEach(part => {
+      if (part.kind === 'brake_fluid' && part.bike_id === 'bike-madone') part.last_service_date = day(-80)
+      if (part.kind === 'brake_pads' && part.bike_id === 'bike-madone') part.last_service_date = day(-4)
+      if (part.kind === 'bar_tape' && part.bike_id === 'bike-madone') part.last_service_date = day(-30)
+      if (part.kind === 'shift_cables' && part.bike_id === 'bike-madone') part.last_service_date = day(-46)
+      if (part.kind === 'cassette_chainrings' && part.bike_id === 'bike-madone') part.accumulated_km = 1860
+      if (part.kind === 'tires' && part.wheelset_id === 'wheel-aero') part.accumulated_km = 860
+      if (part.kind === 'tires' && part.wheelset_id === 'wheel-stock') part.accumulated_km = 1620
+    })
+  }
   let seq = 1
   function Query(table) {
     this.table = table
@@ -2089,14 +2102,13 @@ function sourceLinks(note) {
   }).join('')
 }
 function consumableButton(part, today, bike) {
-  const spec = PaceGear.KINDS[part.kind] || { label: part.kind }
-  const status = part.kind === 'chain_replace' ? 'wear' : PaceGear.gearStatus(part, today).status
-  const detail = part.kind === 'chain_replace' ? PaceGear.chainSinceText(bike, gearState.replacements) : ''
+  const view = PaceGear.consumableLine(part, today, { bike: bike, replacements: gearState.replacements })
+  const warn = view.status === 'soon' || view.status === 'due' ? ' warn' : ''
   return `<button class="gear-line" type="button" data-act="gear-part" data-id="${esc(part.id)}">
-    <i class="gear-dot ${esc(status)}" aria-hidden="true"></i>
+    <i class="gear-dot ${esc(view.status)}" aria-hidden="true"></i>
     <span class="gear-line-copy">
-      <span class="gear-line-top"><span class="gear-line-name">${esc(spec.label)}</span><span class="gear-line-meta">${esc(PaceGear.remainText(part, today))}</span></span>
-      ${detail ? `<span class="gear-line-sub">${esc(detail)}</span>` : ''}
+      <span class="gear-line-top"><span class="gear-line-name">${esc(view.label)}</span><span class="gear-line-meta${warn}">${esc(view.meta)}</span></span>
+      ${view.detail ? `<span class="gear-line-sub">${esc(view.detail)}</span>` : ''}
     </span>
   </button>`
 }
@@ -2396,28 +2408,27 @@ function partSheet() {
   const part = gearState.components.find(row => row.id === gearPartId)
   if (!part) return ''
   const today = taipeiToday()
-  const spec = PaceGear.KINDS[part.kind] || { label: part.kind }
-  const status = part.kind === 'chain_replace' ? { status: 'wear', label: '依磨耗判斷' } : PaceGear.gearStatus(part, today)
   const bike = gearState.bikes.find(row => row.id === part.bike_id) || gearState.wheelsets.filter(row => row.id === part.wheelset_id).map(row => gearState.bikes.find(bike => bike.id === row.bike_id))[0]
-  const since = part.kind === 'chain_replace' && bike ? PaceGear.chainSinceText(bike, gearState.replacements) : ''
+  const view = PaceGear.consumableLine(part, today, { bike: bike, replacements: gearState.replacements })
   const history = part.kind === 'chain_replace' && bike ? PaceGear.chainSummary(bike, gearState.replacements).history : []
   const historyHtml = part.kind === 'chain_replace'
     ? (history.length ? `<ul class="sheet-history">${history.map(row => `<li>${esc(PaceGear.formatChainDate(row.replaced_on))} · 當時 ${esc(String(row.bike_km))} km${row.brand ? ' · ' + esc(row.brand) : ''}${row.note ? ' · ' + esc(row.note) : ''}</li>`).join('')}</ul>` : '<p class="sheet-last">還沒有換鍊紀錄</p>')
     : ''
-  const last = part.kind !== 'chain_replace' && part.last_service_date ? `<p class="sheet-last">上次：${esc(PaceGear.formatChainDate(part.last_service_date))}</p>` : ''
+  const last = part.kind !== 'chain_replace' && part.last_service_date ? `<p class="sheet-last">${part.kind === 'shift_cables' ? '上次更換' : '上次'}：${esc(PaceGear.formatChainDate(part.last_service_date))}</p>` : ''
   const note = PaceGear.NOTES[part.kind]
+  const fixed = /^(brake_fluid|brake_pads|bar_tape|tires|cassette_chainrings|shift_cables|chain_replace)$/.test(part.kind)
   const intervals = []
-  if (part.interval_km != null) intervals.push(`<div class="form-row"><label for="gear-interval-km">公里間隔</label><input id="gear-interval-km" type="number" min="1" step="1" value="${esc(String(part.interval_km))}"></div>`)
-  if (part.interval_months != null) intervals.push(`<div class="form-row"><label for="gear-interval-months">月份間隔</label><input id="gear-interval-months" type="number" min="1" step="1" value="${esc(String(part.interval_months))}"></div>`)
+  if (!fixed && part.interval_km != null) intervals.push(`<div class="form-row"><label for="gear-interval-km">公里間隔</label><input id="gear-interval-km" type="number" min="1" step="1" value="${esc(String(part.interval_km))}"></div>`)
+  if (!fixed && part.interval_months != null) intervals.push(`<div class="form-row"><label for="gear-interval-months">月份間隔</label><input id="gear-interval-months" type="number" min="1" step="1" value="${esc(String(part.interval_months))}"></div>`)
   const intervalSave = intervals.length ? `<button class="cancel-btn" type="button" data-act="gear-interval" data-id="${esc(part.id)}">儲存間隔</button>` : ''
   const noteFields = part.kind === 'chain_replace'
     ? `<div class="form-row"><label for="chain-brand">品牌（選填）</label><input id="chain-brand" type="text"></div><div class="form-row"><label for="chain-note">備註（選填）</label><input id="chain-note" type="text"></div>`
     : `<div class="form-row"><label for="part-note">備註（選填）</label><input id="part-note" type="text" value="${esc(part.brand_note || '')}"></div>`
   const action = part.kind === 'chain_replace' ? 'gear-chain' : 'gear-reset'
   const actionId = part.kind === 'chain_replace' && bike ? bike.id : part.id
-  return `${sheetHead(spec.label)}
-    <div class="sheet-status"><i class="gear-dot ${esc(status.status)}" aria-hidden="true"></i><span>${esc(status.label)}</span>${PaceGear.remainText(part, today) !== status.label && PaceGear.remainText(part, today) !== '到期' ? `<span class="gear-line-meta">${esc(PaceGear.remainText(part, today))}</span>` : ''}</div>
-    ${since ? `<p class="sheet-last">${esc(since)}</p>` : ''}
+  return `${sheetHead(view.label)}
+    <div class="sheet-status"><i class="gear-dot ${esc(view.status)}" aria-hidden="true"></i><span>${esc(view.statusLabel)}</span>${view.meta ? `<span class="gear-line-meta">${esc(view.meta)}</span>` : ''}</div>
+    ${view.detail ? `<p class="sheet-last">${esc(view.detail)}</p>` : ''}
     <button class="save-btn sheet-primary" id="gear-primary" type="button" data-act="${action}" data-id="${esc(actionId)}">${esc(PaceGear.actionLabel(part))}</button>
     ${last}
     ${historyHtml}
