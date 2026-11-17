@@ -200,6 +200,19 @@ test('badge prompts keep one row per badge and group a ride together', () => {
   assert.equal(grouped.groups.some(g => g.activityId === '3'), false)
 })
 
+test('a blank activity id does not keep a second prompt for the same badge', () => {
+  const rows = [
+    { id: '1', badge_key: 'alishan', key: 'alishan', tier: '', earned_on: '2026-03-29', status: 'pending', strava_activity_id: '' },
+    { id: '2', badge_key: 'alishan', key: 'alishan', tier: '', earned_on: '2026-05-03', status: 'pending', strava_activity_id: null }
+  ]
+  const chosen = C.chooseBadgePrompts(rows)
+  assert.equal(chosen.length, 1)
+  assert.equal(chosen[0].id, '1')
+  assert.equal(C.promptFailureMessage({ code: '42501', message: 'forbidden' }), '沒有權限，這次沒有記起來')
+  assert.equal(C.promptFailureMessage({ code: 'P0002', message: 'missing' }), '這張提示已經不在，請重新開啟')
+  assert.equal(C.promptFailureMessage({ message: 'network' }), '沒有記起來，請再試一次')
+})
+
 test('strava cache drops rows older than seven days', () => {
   const now = '2026-11-12T00:00:00Z'
   const rows = [

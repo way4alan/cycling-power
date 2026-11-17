@@ -65,6 +65,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112120000_badges_compliance.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112190000_badge_prompt_activity.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112190000_badge_prompt_activity.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261117120000_badge_prompt_dedupe.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261117120000_badge_prompt_dedupe.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
