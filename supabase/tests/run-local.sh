@@ -97,7 +97,7 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:54321/"; then
 fi
 
 echo "== pace core =="
-node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs" "$ROOT/tests/challenges.test.mjs" "$ROOT/tests/privacy.test.mjs"
+node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs" "$ROOT/tests/challenges.test.mjs" "$ROOT/tests/privacy.test.mjs" "$ROOT/tests/strava-place.test.mjs"
 
 echo "== deno unit =="
 deno test --allow-env "$ROOT/supabase/functions/line-auth/handler_test.ts" "$ROOT/supabase/functions/strava/handler_test.ts"

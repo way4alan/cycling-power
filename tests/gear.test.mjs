@@ -395,3 +395,19 @@ test('strava connect uses the official authorize url and names the data, withdra
   assert.equal(copy.profile, 'https://www.strava.com/settings/profile')
   assert.equal(copy.deauth, '你已在 Strava 解除授權，PACE 已刪除你的 Strava 連線與暫存資料。')
 })
+
+test('garage strava status is one line and the profile section is where connecting lives', () => {
+  const now = Date.parse('2026-11-18T12:00:00Z')
+  assert.equal(G.stravaGarageStatus({ connected: false, now }), '尚未連動 Strava')
+  assert.equal(G.stravaGarageStatus({ connected: true, lastSyncAt: null, now }), 'Strava 已連動・尚未同步')
+  assert.equal(G.stravaGarageStatus({
+    connected: true,
+    lastSyncAt: '2026-11-18T10:00:00Z',
+    now
+  }), 'Strava 已連動・最後同步 2 小時前')
+  assert.equal(G.stravaGarageStatus({
+    connected: true,
+    lastSyncAt: '2026-11-18T11:50:00Z',
+    now
+  }), 'Strava 已連動・最後同步 10 分鐘前')
+})
