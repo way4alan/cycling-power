@@ -67,6 +67,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261112190000_badge_prompt_activity.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261117120000_badge_prompt_dedupe.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261117120000_badge_prompt_dedupe.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118120000_member_wheelsets.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118120000_member_wheelsets.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
@@ -106,6 +108,9 @@ node "$ROOT/supabase/tests/strava_backend.mjs"
 
 echo "== badges =="
 node "$ROOT/supabase/tests/badges_rls.mjs"
+
+echo "== wheel mounts =="
+node "$ROOT/supabase/tests/wheel_mounts.mjs"
 
 if [[ ! -d /tmp/pace-jsdom/node_modules/jsdom ]]; then
   mkdir -p /tmp/pace-jsdom

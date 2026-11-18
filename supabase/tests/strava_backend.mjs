@@ -124,7 +124,7 @@ async function main() {
 
   await sql(`insert into public.bikes (id, line_user_id, name, brand, odometer_km)
     values ('${BIKE}', '${LINE}', 'Madone', 'Trek', 0)`)
-  const wheel = await sql(`select id from public.wheelsets where bike_id = '${BIKE}' and mounted`)
+  const wheel = await sql(`select w.id from public.wheelsets w join public.wheelset_mounts m on m.wheelset_id = w.id and m.end_at is null where m.bike_id = '${BIKE}'`)
   check('context lists the bike and its wheelset',
     (await svc('context', { line_user_id: LINE })).includes(BIKE)
     && (await svc('context', { line_user_id: LINE })).includes(wheel))

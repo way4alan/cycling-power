@@ -227,6 +227,16 @@ test('strava import auto-assigns one setup, asks which bike otherwise, and sugge
   assert.equal(one.bikeId, 'b')
   assert.equal(one.wheelsetId, 'w')
   assert.equal(G.planStravaActivity({
+    sport: 'Ride',
+    gearId: 'g1',
+    bikes: [{ id: 'b1', archived: false }, { id: 'b2', archived: false, strava_gear_id: 'g1' }],
+    wheelsets: [
+      { id: 'w1', bike_id: 'b1', mounted: true },
+      { id: 'w2', bike_id: 'b2', mounted: true },
+      { id: 'spare', bike_id: 'b2', mounted: false }
+    ]
+  }).wheelsetId, 'w2')
+  assert.equal(G.planStravaActivity({
     sport: 'GravelRide', bikes: [{ id: 'b', archived: false }], wheelsets: [{ id: 'w', bike_id: 'b' }]
   }).action, 'assign')
   assert.equal(G.planStravaActivity({ sport: 'Run', bikes: [{ id: 'b' }], wheelsets: [] }).action, 'ignore')

@@ -1549,6 +1549,7 @@ function createDemoDb() {
     gear_components: gearDemo.gear_components,
     chain_replacements: gearDemo.chain_replacements,
     mileage_logs: [],
+    wheelset_mounts: [],
     pending_activities: []
   }
   if (params.get('scenario') === 'fallback') store.rides = store.rides.filter(r => r.category !== 'challenge')
@@ -1572,6 +1573,14 @@ function createDemoDb() {
     store.gear_components = []
     store.chain_replacements = []
   }
+  store.wheelset_mounts = (store.wheelsets || []).filter(row => row.mounted && row.bike_id && row.line_user_id === 'demo-me').map(row => ({
+    id: 'mount-' + row.id,
+    line_user_id: row.line_user_id,
+    bike_id: row.bike_id,
+    wheelset_id: row.id,
+    start_at: day(-30) + 'T00:00:00+08:00',
+    end_at: null
+  }))
   if (params.get('lines') === '1') {
     const shown = store.bikes.find(row => row.id === 'bike-madone')
     if (shown) shown.odometer_km = 5200
@@ -1583,6 +1592,10 @@ function createDemoDb() {
       if (part.kind === 'cassette_chainrings' && part.bike_id === 'bike-madone') part.accumulated_km = 1860
       if (part.kind === 'tires' && part.wheelset_id === 'wheel-aero') part.accumulated_km = 860
       if (part.kind === 'tires' && part.wheelset_id === 'wheel-stock') part.accumulated_km = 1620
+    })
+    store.mileage_logs.push({
+      id: 'log-demo', line_user_id: 'demo-me', ride_date: day(-2), km: 42,
+      bike_id: 'bike-madone', wheelset_id: 'wheel-aero', is_indoor: false, count_indoor_drivetrain: false
     })
   }
   let seq = 1
@@ -1637,6 +1650,14 @@ function createDemoDb() {
         Object.assign(r, this.payload)
         changed.push(Object.assign({}, r))
       })
+      if (this.table === 'bikes' && this.payload && this.payload.archived === true) {
+        const now = new Date().toISOString()
+        changed.forEach(bike => {
+          ;(store.wheelset_mounts || []).forEach(row => {
+            if (!row.end_at && row.bike_id === bike.id) row.end_at = now
+          })
+        })
+      }
       return { data: changed, error: null }
     }
     if (this.op === 'delete') {
@@ -1655,7 +1676,38 @@ function createDemoDb() {
   Query.prototype.then = function (resolve, reject) {
     try { resolve(this.run()) } catch (e) { if (reject) reject(e) }
   }
-  return { from(table) { return new Query(table) } }
+  return {
+    from(table) { return new Query(table) },
+    async rpc(name, args) {
+      const now = new Date().toISOString()
+      if (name === 'mount_wheelset') {
+        store.wheelset_mounts.forEach(row => {
+          if (!row.end_at && (row.bike_id === args.target_bike || row.wheelset_id === args.target_wheel)) row.end_at = now
+        })
+        store.wheelset_mounts.push({
+          id: 'mount-' + (seq++), line_user_id: 'demo-me', bike_id: args.target_bike,
+          wheelset_id: args.target_wheel, start_at: now, end_at: null
+        })
+        return { data: null, error: null }
+      }
+      if (name === 'set_mount_start') {
+        const row = store.wheelset_mounts.find(item => item.id === args.mount_id)
+        if (row) row.start_at = args.start_on + 'T00:00:00+08:00'
+        return { data: null, error: null }
+      }
+      if (name === 'archive_my_wheelset') {
+        const alive = store.wheelsets.filter(row => row.line_user_id === 'demo-me' && row.archived !== true)
+        if (alive.length <= 1) return { data: null, error: { message: 'need at least one wheelset' } }
+        store.wheelset_mounts.forEach(row => {
+          if (!row.end_at && row.wheelset_id === args.target_wheel) row.end_at = now
+        })
+        const wheel = store.wheelsets.find(row => row.id === args.target_wheel)
+        if (wheel) wheel.archived = true
+        return { data: null, error: null }
+      }
+      return { data: null, error: { message: 'missing' } }
+    }
+  }
 }
 
 async function init() {
@@ -2039,7 +2091,7 @@ function paintZones() {
     <div class="zone-legend">${segments.map(seg => `<div><span><i class="swatch" style="background:${seg.color}"></i>${esc(seg.label)}</span><span>${esc(seg.text)}</span></div>`).join('')}</div>`
 }
 async function loadGear() {
-  gearState = { bikes: [], wheelsets: [], components: [], replacements: [] }
+  gearState = { bikes: [], wheelsets: [], components: [], replacements: [], mounts: [], logs: [] }
   if (!schemaCaps.gear) return
   const bikes = await db.from('bikes').select('*')
   if (bikes.error && globalThis.PaceCore && PaceCore.isMissingSchemaError(bikes.error)) {
@@ -2050,13 +2102,17 @@ async function loadGear() {
   const wheels = await db.from('wheelsets').select('*')
   const parts = await db.from('gear_components').select('*')
   const history = await db.from('chain_replacements').select('*')
+  const mounts = await db.from('wheelset_mounts').select('*')
+  const logs = await db.from('mileage_logs').select('*')
   const mine = myProfile && myProfile.line_user_id
   const own = (rows) => (globalThis.PaceGear ? PaceGear.ownedGear(rows, mine) : [])
   gearState = {
     bikes: own(bikes.data),
     wheelsets: own(wheels.data),
     components: own(parts.data),
-    replacements: history.error ? [] : own(history.data)
+    replacements: history.error ? [] : own(history.data),
+    mounts: mounts.error ? [] : own(mounts.data),
+    logs: logs.error ? [] : own(logs.data)
   }
   await loadStravaLink()
 }
@@ -2085,7 +2141,8 @@ function renderGearReminder() {
   if (!due.length) { host.hidden = true; host.textContent = ''; updateGearBadge(); return }
   const first = due[0].item
   const wheel = gearState.wheelsets.find(row => row.id === first.wheelset_id)
-  const bike = gearState.bikes.find(row => row.id === (first.bike_id || (wheel && wheel.bike_id)))
+  const mount = wheel && openMount(null, wheel.id)
+  const bike = gearState.bikes.find(row => row.id === (first.bike_id || (mount && mount.bike_id) || (wheel && wheel.bike_id)))
   const place = wheel ? wheel.name : (bike ? bike.name : '裝備')
   const label = (PaceGear.KINDS[first.kind] || {}).label || '耗材'
   host.hidden = false
@@ -2112,24 +2169,33 @@ function consumableButton(part, today, bike) {
     </span>
   </button>`
 }
+function openMount(bikeId, wheelId) {
+  return (gearState.mounts || []).find(row => !row.end_at && (bikeId ? row.bike_id === bikeId : row.wheelset_id === wheelId))
+}
 function bikeCard(bike, today) {
   const parts = PaceGear.sortConsumables(gearState.components.filter(part => part.bike_id === bike.id), today)
-  const wheels = gearState.wheelsets.filter(row => row.bike_id === bike.id).slice().sort((a, b) => Number(b.mounted === true) - Number(a.mounted === true))
-  const wheelHtml = wheels.map(wheel => {
-    const wheelParts = PaceGear.sortConsumables(gearState.components.filter(part => part.wheelset_id === wheel.id), today)
-    return `<div class="wheel-block">
-      <div class="wheel-head"><b>${esc(wheel.name)}</b><span class="wheel-actions"><button class="name-edit" type="button" data-act="gear-rename-wheel" data-id="${esc(wheel.id)}">改名稱</button>${wheel.mounted ? '<span class="wheel-tag">目前裝在這台</span>' : ''}</span></div>
-      <div class="wheel-km">${esc(String(wheel.odometer_km))} km</div>
-      ${wheelParts.map(part => consumableButton(part, today, bike)).join('')}
-    </div>`
-  }).join('')
+  const mount = openMount(bike.id)
+  const wheel = mount && gearState.wheelsets.find(row => row.id === mount.wheelset_id)
   return `<article class="bike-card">
     <div class="bike-title-row"><h3>${esc(bike.name)}</h3><button class="name-edit" type="button" data-act="gear-rename-bike" data-id="${esc(bike.id)}">改名稱</button></div>
     <p class="bike-meta">${esc([bike.brand, String(bike.odometer_km) + ' km'].filter(Boolean).join(' · '))}</p>
+    <p class="bike-meta">目前裝的輪組：${wheel ? esc(wheel.name) : '還沒裝'}</p>
     ${parts.map(part => consumableButton(part, today, bike)).join('')}
-    ${wheelHtml}
     <button class="cancel-btn" type="button" data-act="gear-wheels" data-id="${esc(bike.id)}">換輪組</button>
     <button class="cancel-btn gear-delete" type="button" data-act="gear-archive" data-id="${esc(bike.id)}">刪除這台車</button>
+  </article>`
+}
+function wheelCard(wheel, today) {
+  const parts = PaceGear.sortConsumables(gearState.components.filter(part => part.wheelset_id === wheel.id), today)
+  const mount = openMount(null, wheel.id)
+  const bike = mount && gearState.bikes.find(row => row.id === mount.bike_id)
+  const started = mount && mount.start_at ? String(mount.start_at).slice(0, 10) : ''
+  return `<article class="bike-card wheel-card">
+    <div class="bike-title-row"><h3>${esc(wheel.name)}</h3><button class="name-edit" type="button" data-act="gear-rename-wheel" data-id="${esc(wheel.id)}">改名稱</button></div>
+    <p class="bike-meta">${esc(String(wheel.odometer_km || 0))} km · ${bike ? '裝在 ' + esc(bike.name) : '沒裝在車上'}</p>
+    ${parts.map(part => consumableButton(part, today, bike)).join('')}
+    ${mount ? `<button class="cancel-btn" type="button" data-act="gear-mount-date" data-id="${esc(mount.id)}">改裝上日期 ${esc(started)}</button>` : ''}
+    <button class="cancel-btn gear-delete" type="button" data-act="gear-archive-wheel" data-id="${esc(wheel.id)}">刪除這組輪組</button>
   </article>`
 }
 function demoStrava() {
@@ -2297,13 +2363,28 @@ function garageHtml() {
       </section>`
   }
   const today = taipeiToday()
+  const wheels = gearState.wheelsets.filter(row => row.archived !== true)
+  const logs = (gearState.logs || []).slice().sort((a, b) => String(b.ride_date).localeCompare(String(a.ride_date))).slice(0, 8)
+  const logHtml = logs.map(row => {
+    const bike = gearState.bikes.find(item => item.id === row.bike_id)
+    const wheel = gearState.wheelsets.find(item => item.id === row.wheelset_id)
+    return `<button class="gear-line" type="button" data-act="gear-log" data-id="${esc(row.id)}">
+      <span class="gear-line-copy"><span class="gear-line-top"><span class="gear-line-name">${esc(row.ride_date)} · ${esc(String(row.km))} km</span><span class="gear-line-meta">修改</span></span>
+      <span class="gear-line-sub">${esc((bike && bike.name) || '未選車')}${wheel ? ' · ' + esc(wheel.name) : ''}</span></span></button>`
+  }).join('')
   return `<button class="text-back" type="button" data-act="gear-close">${icon('chevron-left', 16)}我的資料</button>
     <h2>我的車庫</h2>
     <div class="garage-actions"><button class="save-btn" type="button" data-act="gear-mileage">＋ 新增里程</button></div>
     ${stravaSection(bikes)}
-    ${bikes.map(bike => bikeCard(bike, today)).join('')}
+    <h2 class="section-title">單車</h2>
+    ${bikes.map(bike => bikeCard(bike, today)).join('') || '<p class="field-help">還沒有車</p>'}
+    <button class="cancel-btn" type="button" data-act="gear-add" id="gear-add-btn">新增一台車</button>
+    <h2 class="section-title">輪組</h2>
+    ${wheels.map(wheel => wheelCard(wheel, today)).join('') || '<p class="field-help">還沒有輪組</p>'}
+    <button class="cancel-btn" type="button" data-act="gear-add-wheel">新增輪組</button>
     ${stravaMapSection(bikes)}
-    <button class="cancel-btn" type="button" data-act="gear-add" id="gear-add-btn">新增一台車</button>`
+    <h2 class="section-title">騎乘紀錄</h2>
+    ${logHtml || '<p class="field-help">還沒有里程紀錄</p>'}`
 }
 function renderGear() {
   const home = document.getElementById('profile-home')
@@ -2338,6 +2419,9 @@ function renderGearSheet() {
   else if (gearSheet === 'rename-wheel') body.innerHTML = renameWheelSheet()
   else if (gearSheet === 'mileage') body.innerHTML = mileageSheet()
   else if (gearSheet === 'wheels') body.innerHTML = wheelsSheet()
+  else if (gearSheet === 'add-wheel') body.innerHTML = addWheelSheet()
+  else if (gearSheet === 'mount-date') body.innerHTML = mountDateSheet()
+  else if (gearSheet === 'log') body.innerHTML = logEditSheet()
   else if (gearSheet === 'part') body.innerHTML = partSheet()
   else if (gearSheet === 'strava-ride') body.innerHTML = stravaRideSheet()
   else { sheet.hidden = true; body.innerHTML = '' }
@@ -2352,7 +2436,7 @@ function addBikeSheet() {
     <div class="form-row"><label for="gear-name">車名</label><input id="gear-name" type="text" placeholder="例如 Madone"></div>
     <div class="form-row"><label for="gear-brand">品牌（選填）</label><input id="gear-brand" type="text" placeholder="例如 Trek"></div>
     <div class="form-row"><label for="gear-odo">目前里程 km（選填）</label><input id="gear-odo" type="number" min="0" step="1" placeholder="0"></div>
-    <p class="field-help">建立後會自動加上「原廠輪組」。</p>
+    <p class="field-help">如果還沒有任何輪組，會先放一組原廠輪組。</p>
     <button class="save-btn sheet-primary" type="button" data-act="gear-create">建立</button>`
 }
 function renameBikeSheet() {
@@ -2374,7 +2458,7 @@ function mileageSheet() {
   const bikes = gearBikes()
   const prompt = PaceGear.mileagePrompt(gearState.bikes, gearState.wheelsets, gearBikeId)
   const bike = bikes.find(row => row.id === prompt.bikeId) || bikes[0]
-  const wheels = gearState.wheelsets.filter(row => bike && row.bike_id === bike.id)
+  const wheels = gearState.wheelsets.filter(row => row.archived !== true)
   const bikeField = prompt.showBikes ? `<div class="form-row"><label for="log-bike">哪一台車</label><select id="log-bike">${bikes.map(row => `<option value="${esc(row.id)}" ${row.id === prompt.bikeId ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}</select></div>` : `<input id="log-bike" type="hidden" value="${esc(prompt.bikeId)}">`
   const wheelField = prompt.showWheelsets ? `<div class="form-row" id="log-wheel-row"><label for="log-wheel">這次用的輪組</label><select id="log-wheel">${wheels.map(row => `<option value="${esc(row.id)}" ${row.id === prompt.wheelsetId ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}</select></div>` : `<input id="log-wheel" type="hidden" value="${esc(prompt.wheelsetId)}">`
   return `${sheetHead('新增里程')}
@@ -2389,26 +2473,60 @@ function mileageSheet() {
     </div>
     <button class="save-btn sheet-primary" type="button" data-act="gear-km">記入</button>`
 }
+function addWheelSheet() {
+  return `${sheetHead('新增輪組')}
+    <div class="form-row"><label for="new-wheel">輪組名稱</label><input id="new-wheel" type="text" placeholder="例如 Bontrager Aeolus"></div>
+    <p class="field-help">新輪組先不裝在車上。到單車那裡按換輪組再裝上。</p>
+    <button class="save-btn sheet-primary" type="button" data-act="gear-wheel">新增輪組</button>`
+}
 function wheelsSheet() {
-  const bike = gearBikes().find(row => row.id === gearBikeId) || gearBikes()[0]
+  const bike = gearBikes().find(row => row.id === gearBikeId)
   if (!bike) return ''
-  const wheels = gearState.wheelsets.filter(row => row.bike_id === bike.id)
-  const choices = wheels.map(wheel => wheel.mounted
-    ? `<div class="sheet-choice current"><b>${esc(wheel.name)}</b><span class="wheel-tag">目前裝在這台</span></div>`
-    : `<button class="sheet-choice" type="button" data-act="gear-mount" data-id="${esc(wheel.id)}" data-bike="${esc(bike.id)}"><b>${esc(wheel.name)}</b><span>換成這組</span></button>`
-  ).join('')
+  const choices = gearState.wheelsets.filter(row => row.archived !== true).map(wheel => {
+    const home = openMount(null, wheel.id)
+    const where = home && gearState.bikes.find(row => row.id === home.bike_id)
+    const here = home && home.bike_id === bike.id
+    const note = here ? '目前裝在這台' : (where ? '裝在 ' + where.name : '沒裝在車上')
+    return here
+      ? `<div class="sheet-choice current"><b>${esc(wheel.name)}</b><span class="wheel-tag">${esc(note)}</span></div>`
+      : `<button class="sheet-choice" type="button" data-act="gear-mount" data-id="${esc(wheel.id)}" data-bike="${esc(bike.id)}"><b>${esc(wheel.name)}</b><span>${esc(note)}，換到這台</span></button>`
+  }).join('')
   return `${sheetHead('換輪組')}
-    ${choices}
-    <details class="sheet-fold"><summary>再加一組</summary>
-      <div class="form-row"><label for="new-wheel">輪組名稱</label><input id="new-wheel" type="text" placeholder="例如 Bontrager Aeolus"></div>
-      <button class="save-btn" type="button" data-act="gear-wheel" data-id="${esc(bike.id)}">新增輪組</button>
-    </details>`
+    <p class="field-help">選一組輪組裝到 ${esc(bike.name)}。如果它正裝在別台車，會改裝到這台。</p>
+    ${choices || '<p class="field-help">還沒有輪組</p>'}`
+}
+function mountDateSheet() {
+  const mount = (gearState.mounts || []).find(row => row.id === gearPartId)
+  if (!mount) return ''
+  const wheel = gearState.wheelsets.find(row => row.id === mount.wheelset_id)
+  const bike = gearState.bikes.find(row => row.id === mount.bike_id)
+  const who = [wheel && wheel.name, bike && ('裝在 ' + bike.name)].filter(Boolean).join('，')
+  return `${sheetHead('改裝上日期')}
+    <p class="field-help">${esc(who)}。從這天起，這台車的里程改算到這組輪組。</p>
+    <div class="form-row"><label for="mount-start">裝上日期</label><input id="mount-start" type="date" value="${esc(String(mount.start_at || '').slice(0, 10))}"></div>
+    <button class="save-btn sheet-primary" type="button" data-act="gear-save-mount" data-id="${esc(mount.id)}">儲存日期</button>`
+}
+function logEditSheet() {
+  const row = (gearState.logs || []).find(item => item.id === gearPartId)
+  if (!row) return ''
+  const bikes = gearBikes()
+  const wheels = gearState.wheelsets.filter(item => item.archived !== true)
+  return `${sheetHead('修改這次騎乘')}
+    <div class="form-row"><label for="log-date">日期</label><input id="log-date" type="date" value="${esc(row.ride_date)}"></div>
+    <div class="form-row"><label for="log-km">公里</label><input id="log-km" type="number" min="0.1" step="0.1" value="${esc(String(row.km))}"></div>
+    <div class="form-row"><label for="log-bike">單車</label><select id="log-bike">${bikes.map(bike => `<option value="${esc(bike.id)}" ${bike.id === row.bike_id ? 'selected' : ''}>${esc(bike.name)}</option>`).join('')}</select></div>
+    <div class="form-row"><label for="log-wheel">輪組</label><select id="log-wheel"><option value="">沒有輪組</option>${wheels.map(wheel => `<option value="${esc(wheel.id)}" ${wheel.id === row.wheelset_id ? 'selected' : ''}>${esc(wheel.name)}</option>`).join('')}</select></div>
+    <button class="save-btn sheet-primary" type="button" data-act="gear-save-log" data-id="${esc(row.id)}">儲存</button>`
 }
 function partSheet() {
   const part = gearState.components.find(row => row.id === gearPartId)
   if (!part) return ''
   const today = taipeiToday()
-  const bike = gearState.bikes.find(row => row.id === part.bike_id) || gearState.wheelsets.filter(row => row.id === part.wheelset_id).map(row => gearState.bikes.find(bike => bike.id === row.bike_id))[0]
+  const wheelForPart = gearState.wheelsets.find(row => row.id === part.wheelset_id)
+  const mountForPart = wheelForPart && openMount(null, wheelForPart.id)
+  const bike = gearState.bikes.find(row => row.id === part.bike_id)
+    || (mountForPart && gearState.bikes.find(row => row.id === mountForPart.bike_id))
+    || (wheelForPart && gearState.bikes.find(row => row.id === wheelForPart.bike_id))
   const view = PaceGear.consumableLine(part, today, { bike: bike, replacements: gearState.replacements })
   const history = part.kind === 'chain_replace' && bike ? PaceGear.chainSummary(bike, gearState.replacements).history : []
   const historyHtml = part.kind === 'chain_replace'
@@ -2655,22 +2773,39 @@ async function createBike() {
       return
     }
     const id = insertedId(inserted)
+    const today = taipeiToday()
+    const hadWheel = gearState.wheelsets.some(row => row.archived !== true)
     if (DEMO && id) {
-      const bundle = PaceGear.seedBike({ id, line_user_id: myProfile.line_user_id, created_on: taipeiToday() })
-      bundle.wheelset.id = 'wheel-' + id
-      bundle.wheelset.name = '原廠輪組'
-      bundle.components.forEach((part, i) => {
+      const bundle = PaceGear.seedBike({ id, line_user_id: myProfile.line_user_id, created_on: today })
+      const bikeParts = bundle.components.filter(part => !part.wheelset_id)
+      bikeParts.forEach((part, i) => {
         part.id = 'comp-' + id + '-' + i
-        part.last_service_date = taipeiToday()
-        if (part.wheelset_id) part.wheelset_id = bundle.wheelset.id
+        part.last_service_date = today
       })
-      await db.from('wheelsets').insert(bundle.wheelset)
-      await db.from('gear_components').insert(bundle.components)
+      await db.from('gear_components').insert(bikeParts)
       await db.from('chain_replacements').insert({
-        line_user_id: myProfile.line_user_id, bike_id: id, replaced_on: taipeiToday(), bike_km: Number.isFinite(odo) && odo > 0 ? odo : 0, note: '', brand: ''
+        line_user_id: myProfile.line_user_id, bike_id: id, replaced_on: today, bike_km: Number.isFinite(odo) && odo > 0 ? odo : 0, note: '', brand: ''
       })
+      if (!hadWheel) {
+        bundle.wheelset.id = 'wheel-' + id
+        bundle.wheelset.bike_id = null
+        bundle.wheelset.mounted = false
+        bundle.wheelset.name = '原廠輪組'
+        const wheelParts = bundle.components.filter(part => part.wheelset_id)
+        wheelParts.forEach((part, i) => {
+          part.id = 'comp-wheel-' + id + '-' + i
+          part.wheelset_id = bundle.wheelset.id
+          part.last_service_date = today
+        })
+        await db.from('wheelsets').insert(bundle.wheelset)
+        if (wheelParts.length) await db.from('gear_components').insert(wheelParts)
+        await db.from('wheelset_mounts').insert({
+          line_user_id: myProfile.line_user_id, bike_id: id, wheelset_id: bundle.wheelset.id,
+          start_at: today + 'T00:00:00+08:00', end_at: null
+        })
+      }
     }
-    showToast('已建立，含原廠輪組')
+    showToast(hadWheel ? '已建立' : '已建立，含原廠輪組')
     gearOpen = true
     gearSheet = ''
     gearBikeId = id
@@ -2703,7 +2838,7 @@ async function addWheelset(bikeId) {
   const name = (document.getElementById('new-wheel').value || '').trim()
   if (!name) { showToast('請填輪組名稱'); return }
   const inserted = await db.from('wheelsets').insert({
-    line_user_id: myProfile.line_user_id, bike_id: bikeId, name, brand: '', odometer_km: 0, mounted: false
+    line_user_id: myProfile.line_user_id, name, brand: '', odometer_km: 0, archived: false
   }).select('id')
   if (inserted.error) { showToast('輪組沒有存起來'); return }
   const id = insertedId(inserted)
@@ -2715,22 +2850,59 @@ async function addWheelset(bikeId) {
     })
     await db.from('gear_components').insert(parts)
   }
-  gearSheet = 'wheels'
-  gearBikeId = bikeId
+  gearSheet = ''
+  gearBikeId = bikeId || gearBikeId
   await loadGear()
   renderGear()
 }
 async function mountWheelset(id, bikeId) {
-  const res = await db.from('wheelsets').update({ mounted: true }).eq('id', id)
-  if (res.error) { showToast('沒有換成這組'); return }
-  if (DEMO) {
-    gearState.wheelsets.forEach(row => { if (row.bike_id === bikeId) row.mounted = row.id === id })
-    await db.from('wheelsets').update({ mounted: false }).eq('bike_id', bikeId)
-    await db.from('wheelsets').update({ mounted: true }).eq('id', id)
-  }
+  const res = await db.rpc('mount_wheelset', { target_bike: bikeId, target_wheel: id })
+  if (!res || res.error) { showToast('沒有換成這組'); return }
   showToast('已換上這組輪組')
-  gearSheet = 'wheels'
+  gearSheet = ''
   gearBikeId = bikeId
+  await loadGear()
+  renderGear()
+}
+async function saveMountStart(id) {
+  const day = document.getElementById('mount-start') && document.getElementById('mount-start').value
+  if (!day) { showToast('請選日期'); return }
+  const res = await db.rpc('set_mount_start', { mount_id: id, start_on: day })
+  if (!res || res.error) { showToast('日期沒有存起來'); return }
+  showToast('已改裝上日期')
+  gearSheet = ''
+  await loadGear()
+  renderGear()
+}
+async function saveMileageLog(id) {
+  const km = Number(document.getElementById('log-km') && document.getElementById('log-km').value)
+  const date = document.getElementById('log-date') && document.getElementById('log-date').value
+  const bikeId = document.getElementById('log-bike') && document.getElementById('log-bike').value
+  const wheelId = document.getElementById('log-wheel') && document.getElementById('log-wheel').value
+  if (!(km > 0) || !date || !bikeId) { showToast('請填日期、公里和單車'); return }
+  const res = await db.from('mileage_logs').update({
+    km, ride_date: date, bike_id: bikeId, wheelset_id: wheelId || null
+  }).eq('id', id).select('id')
+  if (!res || res.error || (Array.isArray(res.data) && !res.data.length)) { showToast('沒有改這次騎乘'); return }
+  showToast('已修改這次騎乘')
+  gearSheet = ''
+  await loadGear()
+  renderGear()
+}
+async function archiveWheelset(id) {
+  const wheel = gearState.wheelsets.find(row => row.id === id)
+  if (!wheel) return
+  const ok = await askConfirm({
+    title: '刪除這組輪組',
+    body: '「' + wheel.name + '」會從車庫拿掉。里程紀錄會留著。至少要留一組輪組。',
+    ok: '刪除這組輪組',
+    danger: true
+  })
+  if (!ok) return
+  const res = await db.rpc('archive_my_wheelset', { target_wheel: id })
+  if (!res || res.error) { showToast('至少要留一組輪組'); return }
+  showToast('已從車庫拿掉這組輪組')
+  gearSheet = ''
   await loadGear()
   renderGear()
 }
@@ -4282,8 +4454,14 @@ function onGlobalClick(e) {
   else if (act === 'gear-sheet-close') { gearSheet = ''; renderGearSheet() }
   else if (act === 'gear-create') createBike()
   else if (act === 'gear-archive') archiveBike(el.dataset.id)
+  else if (act === 'gear-add-wheel') { gearSheet = 'add-wheel'; renderGearSheet() }
   else if (act === 'gear-wheel') addWheelset(el.dataset.id)
   else if (act === 'gear-mount') mountWheelset(el.dataset.id, el.dataset.bike)
+  else if (act === 'gear-archive-wheel') archiveWheelset(el.dataset.id)
+  else if (act === 'gear-mount-date') { gearPartId = el.dataset.id; gearSheet = 'mount-date'; renderGearSheet() }
+  else if (act === 'gear-save-mount') saveMountStart(el.dataset.id)
+  else if (act === 'gear-log') { gearPartId = el.dataset.id; gearSheet = 'log'; renderGearSheet() }
+  else if (act === 'gear-save-log') saveMileageLog(el.dataset.id)
   else if (act === 'gear-km') logGearKm()
   else if (act === 'gear-reset') resetGearPart(el.dataset.id)
   else if (act === 'gear-chain') replaceChain(el.dataset.id)
