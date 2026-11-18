@@ -32,8 +32,10 @@ test('a new bike starts with a factory wheelset and both consumable sets', () =>
   assert.equal(replace.interval_km, null)
   assert.equal(replace.interval_months, null)
   assert.equal(seeded.components.find(row => row.kind === 'tires').interval_km, null)
-  assert.equal(seeded.components.find(row => row.kind === 'tires').interval_months, 36)
-  assert.equal(seeded.components.find(row => row.kind === 'shift_cables').basis, 'rule_of_thumb')
+  assert.equal(seeded.components.find(row => row.kind === 'tires').interval_months, null)
+  assert.equal(G.KINDS.shift_cables.label, '變把電池')
+  assert.equal(G.KINDS.chain_replace.label, '鍊條')
+  assert.equal(seeded.components.find(row => row.kind === 'bar_tape').interval_months, 6)
   assert.equal(seeded.components.find(row => row.kind === 'sealant').wheelset_id, seeded.wheelset.id)
   assert.equal(wax.bike_id, 'b')
 })
@@ -136,14 +138,41 @@ test('garage rows say how much is left and put due items first', () => {
     kind: 'chain_wax', accumulated_km: 250, km_at_last_service: 0, interval_km: 250, interval_months: null, last_service_date: '2020-01-01'
   }, '2026-11-10'), '到期')
   assert.equal(G.remainText({
-    kind: 'brake_fluid', interval_km: null, interval_months: 1, last_service_date: '2026-11-03', accumulated_km: 0
-  }, '2026-11-10'), '剩 23 天')
+    kind: 'brake_fluid', interval_months: 12, last_service_date: '2026-11-03', accumulated_km: 0
+  }, '2026-11-10'), '年度更換，剩 358 天')
   assert.equal(G.remainText({
-    kind: 'brake_pads', interval_km: null, interval_months: 1, last_service_date: '2026-09-01', accumulated_km: 0
-  }, '2026-11-10'), '已超過 40 天')
+    kind: 'brake_pads', interval_months: 1, last_service_date: '2026-11-03', accumulated_km: 0
+  }, '2026-11-10'), '每半個月目測檢查一次，剩 8 天')
   assert.equal(G.remainText({
-    kind: 'chain_replace', interval_km: null, interval_months: null, last_service_date: '2020-01-01'
-  }, '2026-11-10'), '依磨耗判斷')
+    kind: 'bar_tape', interval_months: 12, last_service_date: '2026-11-01', accumulated_km: 0
+  }, '2026-11-10'), '剩 174 天')
+  assert.equal(G.remainText({
+    kind: 'cassette_chainrings', accumulated_km: 1860.4, interval_months: null
+  }, '2026-11-10'), '累計 1860 km')
+  assert.equal(G.remainText({
+    kind: 'tires', accumulated_km: 860, interval_months: 36, last_service_date: '2020-01-01'
+  }, '2026-11-10'), '累計 860 km')
+  assert.equal(G.remainText({
+    kind: 'shift_cables', interval_months: 12, last_service_date: '2026-10-01'
+  }, '2026-11-10'), '已使用 40 天')
+  assert.equal(G.gearStatus({
+    kind: 'tires', accumulated_km: 8000, interval_months: 36, last_service_date: '2020-01-01'
+  }, '2026-11-10').status, 'ok')
+  const freshChain = G.consumableLine({ kind: 'chain_replace' }, '2026-11-10', {
+    bike: { id: 'b1', odometer_km: 2480 },
+    replacements: [{ bike_id: 'b1', replaced_on: '2026-08-12', bike_km: 2000 }]
+  })
+  assert.equal(freshChain.label, '鍊條')
+  assert.equal(freshChain.status, 'ok')
+  assert.equal(freshChain.meta, '')
+  assert.equal(freshChain.detail, '上次換鍊 2026/08/12・已騎 480 km')
+  const wornChain = G.consumableLine({ kind: 'chain_replace' }, '2026-11-10', {
+    bike: { id: 'b1', odometer_km: 5200 },
+    replacements: [{ bike_id: 'b1', replaced_on: '2026-01-01', bike_km: 2000 }]
+  })
+  assert.equal(wornChain.status, 'soon')
+  assert.equal(wornChain.meta, '磨耗檢查')
+  assert.match(wornChain.detail, /已騎 3200 km/)
   const sorted = G.sortConsumables([
     { kind: 'bar_tape', interval_km: null, interval_months: 12, last_service_date: '2026-11-01', accumulated_km: 0 },
     { kind: 'chain_wax', interval_km: 250, interval_months: null, accumulated_km: 250, km_at_last_service: 0, last_service_date: '2026-01-01' },
@@ -154,6 +183,7 @@ test('garage rows say how much is left and put due items first', () => {
   assert.equal(G.actionLabel({ kind: 'chain_wax' }), '已上蠟')
   assert.equal(G.actionLabel({ kind: 'chain_replace' }), '已更換')
   assert.equal(G.actionLabel({ kind: 'brake_pads' }), '已檢查')
+  assert.equal(G.actionLabel({ kind: 'shift_cables' }), '已更換')
   assert.equal(G.chainSinceText(
     { id: 'b1', odometer_km: 2480 },
     [{ bike_id: 'b1', replaced_on: '2026-08-12', bike_km: 2000 }]
