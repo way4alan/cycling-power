@@ -1173,11 +1173,12 @@ function openRequestedPanel() {
     switchTab('ride')
     showRideForm()
   }
-  if (open === 'me') {
+  if (open === 'me' || open === 'strava-deauth') {
     switchTab('profile')
     gearOpen = false
     gearSheet = ''
     renderGear()
+    renderStravaDeletion()
   }
   if (open === 'summits' || open === 'scan' || open === 'ftp' || open === 'checkin' || open === 'member') {
     switchTab('profile')
@@ -1757,11 +1758,13 @@ async function init() {
     await loadRideState()
     await loadRankingContext()
     await loadGear()
+    await loadStravaDeletionNotice()
     await loadPaceRecords()
     renderLeaderboard()
     renderNextRide()
     renderMatch()
     renderProfile()
+    renderStravaDeletion()
     renderPace()
     if (isAdmin) renderAdmin()
     await renderRides()
@@ -2290,11 +2293,40 @@ async function stravaAction(action, extra) {
   const body = await res.json().catch(() => ({}))
   return { ok: res.ok, body }
 }
+function stravaPolicyLinks() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<p class="strava-links">${copy.links.map(link => `<a href="${esc(link.href)}"${link.href.startsWith('http') ? ' target="_blank" rel="noopener noreferrer"' : ''}>${esc(link.label)}</a>`).join('')}</p>`
+}
+function stravaSupportLine() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<p class="support-line">客服：<a href="mailto:${esc(copy.email)}">${esc(copy.email)}</a> · <a href="/privacy.html">隱私權政策</a> · <a href="${esc(copy.profile)}" target="_blank" rel="noopener noreferrer">前往我的 Strava</a></p>`
+}
+function stravaConnectControl() {
+  const href = PaceGear.stravaPublicAuthorizeUrl(STRAVA_CLIENT_ID, STRAVA_REDIRECT_URI, STRAVA_SCOPE)
+  return `<a class="strava-connect" href="${esc(href)}" data-act="strava-connect" data-strava-client="${esc(STRAVA_CLIENT_ID)}"><img src="assets/strava/btn_strava_connect_with_orange.png" srcset="assets/strava/btn_strava_connect_with_orange.png 1x, assets/strava/btn_strava_connect_with_orange_x2.png 2x" width="237" height="48" alt="Connect with Strava"></a>`
+}
+function stravaConsent() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<details class="strava-consent">
+    <summary>${esc(copy.summary)}</summary>
+    <div class="strava-consent-body">
+      <p>${esc(copy.intro)}</p>
+      <ul>${copy.items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>
+      <p>${esc(copy.collected)}</p>
+      <p>${esc(copy.withdraw)}</p>
+      <p>${esc(copy.deletion)}</p>
+    </div>
+  </details>`
+}
 function stravaSection(bikes) {
   const pending = freshStravaRows(stravaLink.pending).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
   if (!stravaLink.connected) {
-    return `<button class="strava-official" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect"><span>Connect with Strava</span></button>
-      <p class="field-help">只會讀取你自己的騎乘與 FTP，用來提醒保養、出席和徽章。確認後才會變成 PACE 的紀錄。可隨時中斷連結並刪除暫存。</p>`
+    return `<section class="strava-card strava-connect-card">
+      ${stravaConsent()}
+      ${stravaPolicyLinks()}
+      ${stravaConnectControl()}
+      ${stravaSupportLine()}
+    </section>`
   }
   const rides = pending.map(row => {
     const when = PaceGear.formatChainDate(row.occurred_on)
@@ -2311,6 +2343,8 @@ function stravaSection(bikes) {
       <button class="cancel-btn" type="button" data-act="strava-sync">立即同步</button>
       <button class="cancel-btn" type="button" data-act="strava-disconnect">中斷連結</button>
     </div>
+    ${stravaPolicyLinks()}
+    ${stravaSupportLine()}
   </section>`
 }
 function stravaMapSection(bikes) {
@@ -2611,6 +2645,31 @@ function renderStravaReturn() {
     <p>${esc(stravaReturn.body)}</p>
     <a class="save-btn" href="https://liff.line.me/${esc(LIFF_ID)}">回到 LINE</a>
   </div>`
+}
+let stravaDeletion = null
+async function loadStravaDeletionNotice() {
+  if (DEMO) {
+    stravaDeletion = params.get('open') === 'strava-deauth'
+      ? { line_user_id: 'demo-me', recorded_at: new Date().toISOString(), dismissed_at: null }
+      : null
+    return
+  }
+  const res = await db.from('strava_deletion_notices').select('line_user_id,recorded_at,dismissed_at')
+  if (!res || res.error) { stravaDeletion = null; return }
+  stravaDeletion = (res.data || []).find(row => row.line_user_id === myProfile.line_user_id && !row.dismissed_at) || null
+}
+function renderStravaDeletion() {
+  const host = document.getElementById('strava-deauth')
+  if (!host) return
+  host.hidden = !(stravaDeletion && !stravaDeletion.dismissed_at)
+}
+async function dismissStravaDeletion() {
+  if (!stravaDeletion || stravaDeletion.dismissed_at) return
+  const when = new Date().toISOString()
+  stravaDeletion.dismissed_at = when
+  renderStravaDeletion()
+  if (DEMO) return
+  await db.from('strava_deletion_notices').update({ dismissed_at: when }).eq('line_user_id', myProfile.line_user_id)
 }
 async function connectStrava() {
   if (DEMO) { showToast('示範不會連到 Strava'); return }
@@ -4482,7 +4541,8 @@ function onGlobalClick(e) {
   else if (act === 'checkin-no') declineCheckin()
   else if (act === 'scan-yes') startHistoryScan()
   else if (act === 'scan-no') { pacePrompts.scanOffer = false; renderPacePrompts() }
-  else if (act === 'strava-connect') connectStrava()
+  else if (act === 'strava-connect') { e.preventDefault(); connectStrava() }
+  else if (act === 'strava-deauth-dismiss') dismissStravaDeletion()
   else if (act === 'strava-sync') syncStrava()
   else if (act === 'strava-disconnect') disconnectStrava()
   else if (act === 'strava-ride') { gearPartId = el.dataset.id; gearSheet = 'strava-ride'; renderGearSheet() }

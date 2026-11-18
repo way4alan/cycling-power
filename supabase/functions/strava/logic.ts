@@ -83,6 +83,7 @@ export type Store = {
   apply(row: Record<string, unknown>): Promise<Record<string, unknown>>
   removeActivity(lineUserId: string, externalId: string): Promise<void>
   forgetCache?(lineUserId: string): Promise<void>
+  noteStravaDeletion?(lineUserId: string): Promise<void>
   purgeCache?(): Promise<void>
   saveOffers?(lineUserId: string, offers: {
     key: string
@@ -624,6 +625,7 @@ export async function handleStravaWebhook(
   if (!Number.isFinite(ownerId)) return json(200, { ok: true })
   if (objectType === 'athlete' && String(updates.authorized) === 'false') {
     const token = await store.getToken({ athlete_id: ownerId })
+    if (token && store.noteStravaDeletion) await store.noteStravaDeletion(token.line_user_id)
     await store.deleteToken({ athlete_id: ownerId })
     if (token && store.forgetCache) await store.forgetCache(token.line_user_id)
     return json(200, { ok: true })

@@ -31,14 +31,16 @@ function env(): { get(name: string): string | undefined } {
   return { get: (name) => values[name] }
 }
 
-function memoryStore(): Store & { applied: Record<string, unknown>[]; removed: string[] } {
+function memoryStore(): Store & { applied: Record<string, unknown>[]; removed: string[]; notices: string[] } {
   const tokens: StravaToken[] = []
   const states: { nonce: string; line: string; exp: string; used: boolean }[] = []
   const applied: Record<string, unknown>[] = []
   const removed: string[] = []
+  const notices: string[] = []
   return {
     applied,
     removed,
+    notices,
     async putToken(row) {
       const idx = tokens.findIndex((item) => item.line_user_id === row.line_user_id)
       if (idx >= 0) tokens[idx] = row
@@ -84,6 +86,9 @@ function memoryStore(): Store & { applied: Record<string, unknown>[]; removed: s
       }
       applied.push({ ...row })
       return { status: row.assign ? 'assigned' : 'pending' }
+    },
+    async noteStravaDeletion(lineUserId) {
+      notices.push(lineUserId)
     },
     async removeActivity(_line, externalId) {
       removed.push(externalId)
@@ -389,6 +394,8 @@ Deno.test('webhook imports a ride once, asks before an indoor ride, and ignores 
     store,
   )
   assertEquals(await store.getToken({ athlete_id: 4242 }), null)
+  assertEquals(store.notices, [USER])
+  assertEquals(store.notices.some((line) => line.includes('4242')), false)
 })
 
 Deno.test('history scan offers a personal badge once and disconnect clears the cache', async () => {
