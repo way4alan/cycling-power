@@ -2300,7 +2300,7 @@ function stravaPolicyLinks() {
 }
 function stravaSupportLine() {
   const copy = PaceGear.stravaReviewCopy()
-  return `<p class="support-line">客服：<a href="mailto:${esc(copy.email)}">${esc(copy.email)}</a> · <a href="/privacy.html">隱私權政策</a> · <a href="${esc(copy.profile)}" target="_blank" rel="noopener noreferrer">前往我的 Strava</a></p>`
+  return `<p class="support-line">客服：<a href="mailto:${esc(copy.email)}">${esc(copy.email)}</a></p>`
 }
 function stravaConnectControl() {
   const href = PaceGear.stravaPublicAuthorizeUrl(STRAVA_CLIENT_ID, STRAVA_REDIRECT_URI, STRAVA_SCOPE)
@@ -2365,7 +2365,7 @@ function stravaGarageStatusLine() {
     lastSyncAt: stravaLink.lastSyncAt,
     now: Date.now()
   })
-  return `<button class="strava-status" type="button" data-act="strava-open">${esc(text)}</button>`
+  return `<button class="strava-status" type="button" data-act="strava-open"><span>${esc(text)}</span><span class="strava-status-go" aria-hidden="true">›</span></button>`
 }
 function stravaPendingBlock() {
   const pending = stravaPendingRows()
