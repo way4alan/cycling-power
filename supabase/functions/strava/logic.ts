@@ -34,7 +34,13 @@ export type PaceBike = {
   strava_gear_id?: string | null
   archived?: boolean
 }
-export type PaceWheel = { id: string; bike_id: string; name?: string; mounted?: boolean }
+export type PaceWheel = {
+  id: string
+  bike_id?: string | null
+  mounted_bike_id?: string | null
+  name?: string
+  mounted?: boolean
+}
 
 export type ActivityPlan = {
   action: 'ignore' | 'assign' | 'pending'
@@ -148,10 +154,13 @@ async function readSigned(token: string, secret: string): Promise<Record<string,
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const key = await hmacKey(secret, ['verify'])
+  const signature = b64UrlToBytes(parts[2])
+  const raw = new ArrayBuffer(signature.byteLength)
+  new Uint8Array(raw).set(signature)
   const ok = await crypto.subtle.verify(
     'HMAC',
     key,
-    b64UrlToBytes(parts[2]),
+    raw,
     new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
   )
   if (!ok) return null
@@ -207,11 +216,10 @@ export function planActivity(input: {
     : null
   const lastBike = active.find((bike) => bike.id === input.lastBikeId) || null
   const bike = matched || (active.length === 1 ? active[0] : lastBike)
-  const sets = bike ? (input.wheelsets || []).filter((row) => row.bike_id === bike.id) : []
-  const mounted = sets.find((row) => row.mounted === true) || sets[0] || null
-  const lastWheel = sets.find((row) => row.id === input.lastWheelId) || null
-  const wheel = sets.length === 1 ? sets[0] : (lastWheel || mounted)
-  const canAuto = !!(bike && wheel && sets.length === 1 && !kind.askChain && (active.length === 1 || matched))
+  const sets = bike ? (input.wheelsets || []).filter((row) => row.bike_id === bike.id || row.mounted_bike_id === bike.id) : []
+  const mounted = sets.find((row) => row.mounted === true) || (sets.length === 1 ? sets[0] : null)
+  const wheel = mounted
+  const canAuto = !!(bike && wheel && !kind.askChain && (active.length === 1 || matched))
   if (canAuto && bike && wheel) {
     return { action: 'assign', indoor: kind.indoor, askChain: false, bikeId: bike.id, wheelsetId: wheel.id, notice: '' }
   }

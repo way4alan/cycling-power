@@ -326,9 +326,9 @@ const bikeId = ownBike.json?.[0]?.id
 check('new bike line id comes from the JWT',
   (await sql(`select line_user_id from public.bikes where id = '${bikeId}'`)) === A)
 check('creating a bike also creates the factory wheelset',
-  (await sql(`select name || '|' || mounted::text from public.wheelsets where bike_id = '${bikeId}'`)) === '原廠輪組|true')
+  (await sql(`select w.name from public.wheelsets w join public.wheelset_mounts m on m.wheelset_id = w.id and m.end_at is null where m.bike_id = '${bikeId}'`)) === '原廠輪組')
 check('factory wheelset received sealant and tires',
-  (await sql(`select count(*) from public.gear_components where wheelset_id = (select id from public.wheelsets where bike_id = '${bikeId}')`)) === '2')
+  (await sql(`select count(*) from public.gear_components where wheelset_id = (select m.wheelset_id from public.wheelset_mounts m where m.bike_id = '${bikeId}' and m.end_at is null)`)) === '2')
 check('the bike received its consumables',
   (await sql(`select count(*) from public.gear_components where bike_id = '${bikeId}'`)) === '7')
 check('wax is 250 km with no month interval and replacement has no interval',
@@ -356,7 +356,7 @@ check('chain history keeps the starting record and the new one',
 const stealGear = await api(other, 'PATCH', `/bikes?id=eq.${bikeId}`, { name: '偷改' })
 check('another member did not rename the bike',
   (await sql(`select name from public.bikes where id = '${bikeId}'`)) === 'Madone', stealGear.text)
-const wheelId = await sql(`select id from public.wheelsets where bike_id = '${bikeId}' and mounted`)
+const wheelId = await sql(`select m.wheelset_id from public.wheelset_mounts m where m.bike_id = '${bikeId}' and m.end_at is null`)
 const extraWheel = await api(member, 'POST', '/wheelsets', {
   bike_id: bikeId, name: 'Bontrager Aeolus', brand: 'Bontrager', mounted: false, odometer_km: 0
 }, 'return=representation')
