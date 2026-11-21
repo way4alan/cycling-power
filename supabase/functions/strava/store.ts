@@ -57,6 +57,9 @@ export function serviceStore(supabaseUrl: string, serviceKey: string, fetchImpl:
     async forgetCache(lineUserId) {
       await rpc('forget_member_strava', { target: lineUserId })
     },
+    async noteStravaDeletion(lineUserId) {
+      await rpc('note_strava_deletion', { target: lineUserId })
+    },
     async purgeCache() {
       await rpc('purge_expired_strava_cache', {})
     },

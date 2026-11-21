@@ -98,7 +98,7 @@ let gearSheet = ''
 let gearBikeId = ''
 let gearPartId = ''
 let gearAdvanced = false
-let stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
+let stravaLink = { connected: false, gear: [], pending: [], demoReady: false, lastSyncAt: null }
 let stravaReturn = null
 let badgeIndex = {}
 let memberLineId = ''
@@ -1173,11 +1173,16 @@ function openRequestedPanel() {
     switchTab('ride')
     showRideForm()
   }
-  if (open === 'me') {
-    switchTab('profile')
-    gearOpen = false
-    gearSheet = ''
-    renderGear()
+  if (open === 'me' || open === 'strava-deauth' || open === 'strava-connected') {
+    if (params.get('section') === 'strava' || open === 'strava-deauth' || open === 'strava-connected') focusStravaSection()
+    else {
+      switchTab('profile')
+      gearOpen = false
+      gearSheet = ''
+      renderGear()
+      renderStravaPanel()
+      renderStravaDeletion()
+    }
   }
   if (open === 'summits' || open === 'scan' || open === 'ftp' || open === 'checkin' || open === 'member') {
     switchTab('profile')
@@ -1185,7 +1190,7 @@ function openRequestedPanel() {
     if (open === 'member') memberLineId = params.get('who') || memberLineId || 'r1'
     renderProfile()
   }
-  if (open === 'gear' || open === 'garage' || open === 'add-bike' || open === 'add' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain' || open === 'mileage' || open === 'wax' || open === 'advanced' || open === 'strava-connected' || open === 'strava-pending') {
+  if (open === 'gear' || open === 'garage' || open === 'add-bike' || open === 'add' || open === 'bike' || open === 'wheels' || open === 'basis' || open === 'chain' || open === 'mileage' || open === 'wax' || open === 'advanced' || open === 'strava-pending') {
     switchTab('profile')
     gearOpen = true
     gearBikeId = gearState.bikes[0] ? gearState.bikes[0].id : ''
@@ -1203,18 +1208,13 @@ function openRequestedPanel() {
     stravaReturn = PaceGear.stravaCallbackScreen(
       open === 'strava-ok' ? { ok: true } : { error: open === 'strava-retry' ? 'invalid_state' : 'access_denied' }
     )
-    switchTab('profile')
-    gearOpen = true
-    renderStravaReturn()
-    renderGear()
+    focusStravaSection()
   }
   if (DEMO && !open && PaceGear.parseStravaCallback(location.search, PaceGear.readStravaPending(stravaStores()))) {
     stravaReturn = { kind: 'success', title: '已接到 Strava 授權', body: '這個回傳網址可以完成連結。示範不會真的連到 Strava。' }
-    switchTab('profile')
-    gearOpen = true
-    renderStravaReturn()
-    renderGear()
+    focusStravaSection()
   }
+  if (!open && stravaDeletion && !stravaDeletion.dismissed_at) focusStravaSection()
   if (open === 'announce') {
     const fallback = (PaceCore.nextUpcoming(rideState.rides || [], Date.now()) || {}).id || ''
     const id = safeRide && (rideState.rides || []).some(r => r.id === safeRide) ? safeRide : fallback
@@ -1757,11 +1757,13 @@ async function init() {
     await loadRideState()
     await loadRankingContext()
     await loadGear()
+    await loadStravaDeletionNotice()
     await loadPaceRecords()
     renderLeaderboard()
     renderNextRide()
     renderMatch()
     renderProfile()
+    renderStravaDeletion()
     renderPace()
     if (isAdmin) renderAdmin()
     await renderRides()
@@ -2201,10 +2203,11 @@ function wheelCard(wheel, today) {
 function demoStrava() {
   if (stravaLink.demoReady) return stravaLink
   const open = params.get('open')
-  const connected = open === 'strava-connected' || open === 'strava-pending' || open === 'strava-ok' || params.get('strava') === '1'
+  const connected = open === 'strava-connected' || open === 'strava-pending' || open === 'strava-ok' || params.get('strava') === '1' || (open === 'me' && params.get('section') === 'strava' && params.get('strava') === '1')
   return {
     connected,
     demoReady: true,
+    lastSyncAt: connected ? new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() : null,
     gear: connected ? [
       { id: 'b-madone', name: 'Madone SLR Gen 8' },
       { id: 'b-emonda', name: 'Emonda SL' }
@@ -2270,7 +2273,8 @@ async function loadStravaLink() {
     if (!status.ok) return
     const body = await status.json()
     stravaLink.connected = body.connected === true
-    if (!stravaLink.connected) { stravaLink.gear = []; return }
+    stravaLink.lastSyncAt = body.last_sync_at || null
+    if (!stravaLink.connected) { stravaLink.gear = []; stravaLink.lastSyncAt = null; return }
     const bikes = await fetch(SUPABASE_URL + '/functions/v1/strava-auth', {
       method: 'POST', headers, body: JSON.stringify({ action: 'bikes' })
     })
@@ -2290,12 +2294,82 @@ async function stravaAction(action, extra) {
   const body = await res.json().catch(() => ({}))
   return { ok: res.ok, body }
 }
-function stravaSection(bikes) {
-  const pending = freshStravaRows(stravaLink.pending).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
+function stravaPolicyLinks() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<p class="strava-links">${copy.links.map(link => `<a href="${esc(link.href)}"${link.href.startsWith('http') ? ' target="_blank" rel="noopener noreferrer"' : ''}>${esc(link.label)}</a>`).join('')}</p>`
+}
+function stravaSupportLine() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<p class="support-line">客服：<a href="mailto:${esc(copy.email)}">${esc(copy.email)}</a></p>`
+}
+function stravaConnectControl() {
+  const href = PaceGear.stravaPublicAuthorizeUrl(STRAVA_CLIENT_ID, STRAVA_REDIRECT_URI, STRAVA_SCOPE)
+  return `<a class="strava-connect" href="${esc(href)}" data-act="strava-connect" data-strava-client="${esc(STRAVA_CLIENT_ID)}"><img src="assets/strava/btn_strava_connect_with_orange.png" srcset="assets/strava/btn_strava_connect_with_orange.png 1x, assets/strava/btn_strava_connect_with_orange_x2.png 2x" width="237" height="48" alt="Connect with Strava"></a>`
+}
+function stravaConsent() {
+  const copy = PaceGear.stravaReviewCopy()
+  return `<details class="strava-consent">
+    <summary>${esc(copy.summary)}</summary>
+    <div class="strava-consent-body">
+      <p>${esc(copy.intro)}</p>
+      <ul>${copy.items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>
+      <p>${esc(copy.collected)}</p>
+      <p>${esc(copy.withdraw)}</p>
+      <p>${esc(copy.deletion)}</p>
+    </div>
+  </details>`
+}
+function stravaPendingRows() {
+  return freshStravaRows(stravaLink.pending).filter(row => row.status !== 'assigned' && row.status !== 'ignored')
+}
+function stravaPanelHtml() {
   if (!stravaLink.connected) {
-    return `<button class="strava-official" type="button" data-strava-client="${esc(STRAVA_CLIENT_ID)}" data-act="strava-connect"><span>Connect with Strava</span></button>
-      <p class="field-help">只會讀取你自己的騎乘與 FTP，用來提醒保養、出席和徽章。確認後才會變成 PACE 的紀錄。可隨時中斷連結並刪除暫存。</p>`
+    return `<section class="strava-card strava-connect-card">
+      ${stravaConsent()}
+      ${stravaPolicyLinks()}
+      ${stravaConnectControl()}
+      ${stravaSupportLine()}
+    </section>`
   }
+  const status = PaceGear.stravaGarageStatus({ connected: true, lastSyncAt: stravaLink.lastSyncAt, now: Date.now() })
+  return `<section class="strava-card">
+    <p class="field-help">${esc(status)}</p>
+    <div class="strava-actions">
+      <button class="cancel-btn" type="button" data-act="strava-sync">立即同步</button>
+      <button class="cancel-btn" type="button" data-act="strava-disconnect">中斷連結</button>
+    </div>
+    ${stravaPolicyLinks()}
+    ${stravaSupportLine()}
+  </section>`
+}
+function renderStravaPanel() {
+  const host = document.getElementById('strava-panel')
+  if (!host || !globalThis.PaceGear) return
+  host.innerHTML = stravaPanelHtml()
+}
+function focusStravaSection() {
+  gearOpen = false
+  gearSheet = ''
+  memberLineId = ''
+  switchTab('profile', { scroll: false })
+  renderGear()
+  renderStravaPanel()
+  renderStravaDeletion()
+  renderStravaReturn()
+  const node = document.getElementById('strava-section')
+  if (node && node.scrollIntoView) node.scrollIntoView({ block: 'start' })
+}
+function stravaGarageStatusLine() {
+  const text = PaceGear.stravaGarageStatus({
+    connected: !!stravaLink.connected,
+    lastSyncAt: stravaLink.lastSyncAt,
+    now: Date.now()
+  })
+  return `<button class="strava-status" type="button" data-act="strava-open"><span>${esc(text)}</span><span class="strava-status-go" aria-hidden="true">›</span></button>`
+}
+function stravaPendingBlock() {
+  const pending = stravaPendingRows()
+  if (!pending.length) return ''
   const rides = pending.map(row => {
     const when = PaceGear.formatChainDate(row.occurred_on)
     return `<button class="gear-line" type="button" data-act="strava-ride" data-id="${esc(row.id)}">
@@ -2304,14 +2378,7 @@ function stravaSection(bikes) {
       ${row.external_id ? `<a class="strava-view" href="https://www.strava.com/activities/${esc(String(row.external_id))}" target="_blank" rel="noopener noreferrer">View on Strava</a>` : ''}
       ${/garmin/i.test(row.device_name || '') ? '<span class="garmin-note">Garmin</span>' : ''}</span></button>`
   }).join('')
-  return `<section class="strava-card">
-    <div class="wheel-head"><b>已連結 Strava</b>${pending.length ? `<span class="garage-due">${pending.length}</span>` : ''}</div>
-    ${rides}
-    <div class="strava-actions">
-      <button class="cancel-btn" type="button" data-act="strava-sync">立即同步</button>
-      <button class="cancel-btn" type="button" data-act="strava-disconnect">中斷連結</button>
-    </div>
-  </section>`
+  return `<section class="strava-card"><h3>還沒記入的騎乘</h3>${rides}</section>`
 }
 function stravaMapSection(bikes) {
   const gear = stravaLink.gear || []
@@ -2356,6 +2423,7 @@ function garageHtml() {
   const bikes = gearBikes()
   if (!bikes.length) {
     return `<button class="text-back" type="button" data-act="gear-close">${icon('chevron-left', 16)}我的資料</button>
+      ${stravaGarageStatusLine()}
       <section class="garage-empty">
         <h2>新增你的第一台車</h2>
         <p>記下里程和保養，上車前看一眼就好。</p>
@@ -2375,7 +2443,8 @@ function garageHtml() {
   return `<button class="text-back" type="button" data-act="gear-close">${icon('chevron-left', 16)}我的資料</button>
     <h2>我的車庫</h2>
     <div class="garage-actions"><button class="save-btn" type="button" data-act="gear-mileage">＋ 新增里程</button></div>
-    ${stravaSection(bikes)}
+    ${stravaGarageStatusLine()}
+    ${stravaPendingBlock()}
     <h2 class="section-title">單車</h2>
     ${bikes.map(bike => bikeCard(bike, today)).join('') || '<p class="field-help">還沒有車</p>'}
     <button class="cancel-btn" type="button" data-act="gear-add" id="gear-add-btn">新增一台車</button>
@@ -2612,6 +2681,31 @@ function renderStravaReturn() {
     <a class="save-btn" href="https://liff.line.me/${esc(LIFF_ID)}">回到 LINE</a>
   </div>`
 }
+let stravaDeletion = null
+async function loadStravaDeletionNotice() {
+  if (DEMO) {
+    stravaDeletion = params.get('open') === 'strava-deauth'
+      ? { line_user_id: 'demo-me', recorded_at: new Date().toISOString(), dismissed_at: null }
+      : null
+    return
+  }
+  const res = await db.from('strava_deletion_notices').select('line_user_id,recorded_at,dismissed_at')
+  if (!res || res.error) { stravaDeletion = null; return }
+  stravaDeletion = (res.data || []).find(row => row.line_user_id === myProfile.line_user_id && !row.dismissed_at) || null
+}
+function renderStravaDeletion() {
+  const host = document.getElementById('strava-deauth')
+  if (!host) return
+  host.hidden = !(stravaDeletion && !stravaDeletion.dismissed_at)
+}
+async function dismissStravaDeletion() {
+  if (!stravaDeletion || stravaDeletion.dismissed_at) return
+  const when = new Date().toISOString()
+  stravaDeletion.dismissed_at = when
+  renderStravaDeletion()
+  if (DEMO) return
+  await db.from('strava_deletion_notices').update({ dismissed_at: when }).eq('line_user_id', myProfile.line_user_id)
+}
 async function connectStrava() {
   if (DEMO) { showToast('示範不會連到 Strava'); return }
   const mobile = PaceGear.isMobileStravaClient(navigator.userAgent)
@@ -2636,12 +2730,13 @@ async function syncStrava() {
   if (!result || !result.ok) { showToast('沒有同步'); return }
   showToast('已同步')
   await loadGear()
-  renderGear()
+  renderStravaPanel()
+  if (gearOpen) renderGear()
 }
 async function disconnectStrava() {
   const deleted = { kind: 'success', title: '已刪除 Strava 資料', body: '暫存的活動、待確認項目和連線都已刪除。已確認的出席與徽章仍是 PACE 的紀錄。' }
   if (DEMO) {
-    stravaLink = { connected: false, gear: [], pending: [], demoReady: true }
+    stravaLink = { connected: false, gear: [], pending: [], demoReady: true, lastSyncAt: null }
     pacePrompts = { scanOffer: false, badges: [], checkin: null, ftp: null }
     showStravaResult(deleted)
     return
@@ -2650,7 +2745,7 @@ async function disconnectStrava() {
   if (!result || !result.ok) { showToast('沒有中斷'); return }
   await db.from('pending_activities').delete().eq('line_user_id', myProfile.line_user_id)
   if (db.rpc) await db.rpc('forget_my_strava_cache')
-  stravaLink = { connected: false, gear: [], pending: [], demoReady: false }
+  stravaLink = { connected: false, gear: [], pending: [], demoReady: false, lastSyncAt: null }
   pacePrompts = { scanOffer: false, badges: [], checkin: null, ftp: null }
   showStravaResult(deleted)
 }
@@ -2697,10 +2792,7 @@ async function confirmStravaRide(id) {
 }
 function showStravaResult(screen) {
   stravaReturn = screen
-  switchTab('profile')
-  gearOpen = true
-  renderStravaReturn()
-  renderGear()
+  focusStravaSection()
 }
 async function finishStravaOAuth() {
   const pending = PaceGear.readStravaPending(stravaStores())
@@ -2725,7 +2817,8 @@ async function finishStravaOAuth() {
   }
   showStravaResult(PaceGear.stravaCallbackScreen({ ok: true }))
   await loadGear()
-  renderGear()
+  renderStravaPanel()
+  if (gearOpen) renderGear()
 }
 function openGarage() {
   switchTab('profile')
@@ -3279,6 +3372,7 @@ async function startHistoryScan() {
 }
 function renderProfile() {
   if (!myProfile) return
+  renderStravaPanel()
   const me = currentRider()
   const count = me?.attendance_count || 0
   const title = titleBadge(count)
@@ -4347,7 +4441,7 @@ function filterCat(v, el) {
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.toggle('active', b === el))
   renderLeaderboard()
 }
-function switchTab(id) {
+function switchTab(id, opt) {
   if (!document.getElementById('tab-' + id)) return
   const order = TAB_ORDER.concat('admin')
   const dir = order.indexOf(id) < order.indexOf(currentTab) ? 'back' : 'forward'
@@ -4358,7 +4452,7 @@ function switchTab(id) {
   if (id === 'admin' && isAdmin) renderAdmin()
   if (id === 'pace') renderPace()
   syncChrome()
-  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+  if (!opt || opt.scroll !== false) window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
 }
 function switchAdminTab(id) {
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === id))
@@ -4482,7 +4576,9 @@ function onGlobalClick(e) {
   else if (act === 'checkin-no') declineCheckin()
   else if (act === 'scan-yes') startHistoryScan()
   else if (act === 'scan-no') { pacePrompts.scanOffer = false; renderPacePrompts() }
-  else if (act === 'strava-connect') connectStrava()
+  else if (act === 'strava-connect') { e.preventDefault(); connectStrava() }
+  else if (act === 'strava-open') focusStravaSection()
+  else if (act === 'strava-deauth-dismiss') dismissStravaDeletion()
   else if (act === 'strava-sync') syncStrava()
   else if (act === 'strava-disconnect') disconnectStrava()
   else if (act === 'strava-ride') { gearPartId = el.dataset.id; gearSheet = 'strava-ride'; renderGearSheet() }

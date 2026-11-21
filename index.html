@@ -230,9 +230,17 @@
         </div>
 
         <div id="tab-profile" class="tab-panel">
-          <section id="strava-return" class="strava-return" hidden></section>
           <div id="profile-home">
           <div id="pace-prompts"></div>
+          <section id="strava-section" class="strava-panel">
+            <h2 class="section-title">Strava 連動</h2>
+            <section id="strava-deauth" class="deauth-banner" hidden>
+              <p>你已在 Strava 解除授權，PACE 已刪除你的 Strava 連線與暫存資料。</p>
+              <button type="button" data-act="strava-deauth-dismiss">知道了</button>
+            </section>
+            <section id="strava-return" class="strava-return" hidden></section>
+            <div id="strava-panel"></div>
+          </section>
           <div id="profile-hero"></div>
           <button class="garage-entry" id="garage-entry" type="button" data-act="gear-open-screen" hidden>
             <span class="left"><span data-icon="bike" data-size="18"></span>我的車庫</span>

@@ -69,6 +69,8 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/2
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261117120000_badge_prompt_dedupe.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118120000_member_wheelsets.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118120000_member_wheelsets.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118150000_strava_deletion_notice.sql"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/migrations/20261118150000_strava_deletion_notice.sql"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d pace -f "$ROOT/supabase/tests/seed.sql"
 
 cat > "$RUNTIME/postgrest.conf" <<'CONF'
@@ -95,7 +97,7 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:54321/"; then
 fi
 
 echo "== pace core =="
-node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs" "$ROOT/tests/challenges.test.mjs"
+node --test "$ROOT/tests/pace-core.test.mjs" "$ROOT/tests/gear.test.mjs" "$ROOT/tests/strava-verify.test.mjs" "$ROOT/tests/challenges.test.mjs" "$ROOT/tests/privacy.test.mjs" "$ROOT/tests/strava-place.test.mjs"
 
 echo "== deno unit =="
 deno test --allow-env "$ROOT/supabase/functions/line-auth/handler_test.ts" "$ROOT/supabase/functions/strava/handler_test.ts"
@@ -111,6 +113,9 @@ node "$ROOT/supabase/tests/badges_rls.mjs"
 
 echo "== wheel mounts =="
 node "$ROOT/supabase/tests/wheel_mounts.mjs"
+
+echo "== strava deletion notice =="
+node "$ROOT/supabase/tests/strava_deletion.mjs"
 
 if [[ ! -d /tmp/pace-jsdom/node_modules/jsdom ]]; then
   mkdir -p /tmp/pace-jsdom

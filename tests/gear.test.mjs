@@ -369,3 +369,45 @@ test('bike and wheelset names trim to a non-empty name of at most 80 characters'
   assert.equal(G.cleanGearName('輪'.repeat(81)).ok, false)
   assert.deepEqual(G.cleanGearName('   ', { allowEmpty: true }), { ok: true, name: '' })
 })
+
+test('strava connect uses the official authorize url and names the data, withdrawal, and deletion', () => {
+  const url = new URL(G.stravaPublicAuthorizeUrl('295868', 'https://cycling-power.vercel.app/?strava=callback', 'activity:read_all,profile:read_all'))
+  assert.equal(url.origin + url.pathname, 'https://www.strava.com/oauth/authorize')
+  assert.equal(url.searchParams.get('client_id'), '295868')
+  assert.equal(url.searchParams.get('response_type'), 'code')
+  assert.equal(url.searchParams.get('redirect_uri'), 'https://cycling-power.vercel.app/?strava=callback')
+  assert.equal(url.searchParams.get('scope'), 'activity:read_all,profile:read_all')
+  assert.equal(url.searchParams.get('approval_prompt'), 'auto')
+  const copy = G.stravaReviewCopy()
+  const text = [copy.intro, copy.collected, copy.withdraw, copy.deletion, copy.deauth].concat(copy.items).join('\n')
+  assert.match(text, /FTP/)
+  assert.match(text, /polyline/)
+  assert.match(text, /裝置名稱/)
+  assert.match(text, /裝備識別/)
+  assert.match(text, /權杖/)
+  assert.match(text, /webhook/)
+  assert.match(text, /一次性/)
+  assert.match(text, /書面確認/)
+  assert.equal(copy.email, 'thewayzstore@gmail.com')
+  assert.equal(copy.links[0].href, '/privacy.html')
+  assert.equal(copy.links[1].href, '/privacy.html#withdraw')
+  assert.equal(copy.links[2].href, 'https://www.strava.com/settings/apps')
+  assert.equal(copy.profile, 'https://www.strava.com/settings/profile')
+  assert.equal(copy.deauth, '你已在 Strava 解除授權，PACE 已刪除你的 Strava 連線與暫存資料。')
+})
+
+test('garage strava status is one line and the profile section is where connecting lives', () => {
+  const now = Date.parse('2026-11-18T12:00:00Z')
+  assert.equal(G.stravaGarageStatus({ connected: false, now }), '尚未連動 Strava')
+  assert.equal(G.stravaGarageStatus({ connected: true, lastSyncAt: null, now }), 'Strava 已連動・尚未同步')
+  assert.equal(G.stravaGarageStatus({
+    connected: true,
+    lastSyncAt: '2026-11-18T10:00:00Z',
+    now
+  }), 'Strava 已連動・最後同步 2 小時前')
+  assert.equal(G.stravaGarageStatus({
+    connected: true,
+    lastSyncAt: '2026-11-18T11:50:00Z',
+    now
+  }), 'Strava 已連動・最後同步 10 分鐘前')
+})

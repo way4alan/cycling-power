@@ -824,6 +824,14 @@ input[type=range]::-moz-range-thumb {
 }
 .garage-empty h2 { font-size: 20px; margin-bottom: 8px; }
 .garage-empty p { color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+.strava-panel { margin: 4px 0 16px; scroll-margin-top: 84px; }
+.strava-status {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left; color: inherit; font: inherit;
+  background: rgba(255, 255, 255, .03); border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px 14px; margin: 0 0 12px;
+}
+.strava-status-go { color: var(--accent); font-size: 22px; line-height: 1; }
 .strava-card {
   margin: 0 0 12px; padding: 12px; border-radius: 16px;
   border: 1px solid var(--line); background: rgba(255, 255, 255, .03);
@@ -838,9 +846,23 @@ input[type=range]::-moz-range-thumb {
 .strava-map-row select { flex: 1; min-width: 0; }
 .gear-delete { margin-top: 8px; color: #FF6B78; }
 .strava-return { margin: 0 0 12px; }
-.strava-official {
-  width: 100%; height: 48px; border: 0; border-radius: 4px; background: #FC5200; color: #fff;
-  font-weight: 700; letter-spacing: .01em; display: inline-flex; align-items: center; justify-content: center;
+.strava-connect { display: inline-block; margin: 4px 0 8px; line-height: 0; background: transparent; border: 0; padding: 0; }
+.strava-connect img { height: 48px; width: auto; border: 0; display: block; }
+.strava-consent { margin: 0 0 8px; }
+.strava-consent summary { cursor: pointer; font-weight: 700; }
+.strava-consent-body { color: var(--text-dim); font-size: 14px; }
+.strava-consent-body ul { margin: 6px 0 6px 1.1em; }
+.strava-links, .support-line { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 10px; font-size: 14px; }
+.strava-links a, .support-line a { color: var(--accent); overflow-wrap: anywhere; }
+.deauth-banner {
+  margin: 0 0 12px; padding: 14px; border-radius: 16px;
+  border: 1px solid rgba(230, 43, 138, .5); background: rgba(230, 43, 138, .12);
+}
+.deauth-banner[hidden] { display: none; }
+.deauth-banner p { margin-bottom: 10px; line-height: 1.5; }
+.deauth-banner button {
+  border: 0; border-radius: 999px; background: var(--accent); color: #fff;
+  font: inherit; font-weight: 700; padding: 8px 14px;
 }
 .strava-view { color: #FC5200; font-weight: 700; text-decoration: underline; font-size: 13px; }
 .garmin-note { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--text-dim); }
